@@ -1,35 +1,41 @@
-name: Deployment
+name: Build
 
 on:
+  push:
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  web:
     name: web
     runs-on: ubuntu-latest
 
     steps:
-      - name: chekout repo
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-      - name: Setup node js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
         with:
           version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
         working-directory: apps/web
 
-      - name: build project
+      - name: Build web app
         run: pnpm build
-        shell: bash
         working-directory: apps/web
         env:
           VITE_API_URL: /api
@@ -40,17 +46,18 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
 
-      # - name: Test server
-      #   working-directory: ./apps/api
-      #   run: go test ./...
+      - name: Test server
+        working-directory: apps/api
+        run: go test ./...
 
       - name: Build server
-        working-directory: ./apps/api
-        run: go build ./cmd/api/main.go
+        working-directory: apps/api
+        run: go build ./cmd/api
