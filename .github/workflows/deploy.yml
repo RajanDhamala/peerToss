@@ -1,0 +1,56 @@
+name: Deployment
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    name: web
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: chekout repo
+        uses: actions/checkout@v4
+
+      - name: Setup node js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: apps/web
+
+      - name: build project
+        run: pnpm build
+        shell: bash
+        working-directory: apps/web
+        env:
+          VITE_API_URL: /api
+
+  api:
+    name: api
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+
+      # - name: Test server
+      #   working-directory: ./apps/api
+      #   run: go test ./...
+
+      - name: Build server
+        working-directory: ./apps/api
+        run: go build ./cmd/api/main.go
