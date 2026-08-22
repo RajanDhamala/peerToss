@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -25,6 +28,25 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+type Client struct {
+	ID   string
+	Conn *websocket.Conn
+}
+
+type Session struct {
+	ID        string
+	CreatedBy string
+	User1     *Client
+	User2     *Client
+	State     string
+	ExpiresAt time.Time
+}
+
+var (
+	ActiveClients  = make(map[string]*Client)
+	ActiveSessions = make(map[string]*Session)
+)
+
 type WsMessage struct {
 	Event string      `json:"event"`
 	Data  interface{} `json:"data"`
@@ -36,6 +58,13 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("failed to upgrade connection:", err)
 		return
 	}
+	NewUUid := uuid.NewString()
+	client := Client{
+		ID:   NewUUid,
+		Conn: conn,
+	}
+	ActiveClients[NewUUid] = &client
+
 	conn.SetReadLimit(24 * 1024) // 24 kb max palyload size
 
 	// Initial read deadline.
@@ -46,10 +75,18 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("PONG")
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
-	NewUUid := uuid.NewString()
 	msg := WsMessage{}
 
-	defer conn.Close()
+	// cleanup
+	defer func() {
+		conn.Close()
+		_, ok := ActiveClients[NewUUid]
+		if ok != true {
+			fmt.Println("session not found to flush")
+		}
+		delete(ActiveClients, NewUUid)
+	}()
+
 	conn.WriteMessage(websocket.TextMessage, []byte("connected"))
 	conn.WriteJSON(map[string]string{
 		"SocketId": NewUUid,
@@ -93,9 +130,88 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Println("got to the demo event")
 		case "base":
 			fmt.Println("got to the base event")
+		case "send-message":
+			fmt.Println("got to the message")
 		default:
 			return
 		}
 
+	}
+}
+
+const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+func generateCode(length int) (string, error) {
+	code := make([]byte, length)
+
+	for i := range code {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "", err
+		}
+
+		code[i] = chars[n.Int64()]
+	}
+
+	return string(code), nil
+}
+
+func (c *Controller) CreateSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	fmt.Println("ready to start the ws session btw")
+
+	// assume currenly its user socket/id ok hardcoded for now
+	userid := "test123"
+	newCode, err := generateCode(6)
+	if err != nil {
+		fmt.Println("error while genrating code")
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "failed to create session",
+		})
+	}
+
+	data := Session{
+		ID:        newCode,
+		CreatedBy: userid,
+		User1:     ActiveClients[userid],
+		State:     "pending",
+		ExpiresAt: time.Now().Add(60 * time.Second),
+	}
+	ActiveSessions[newCode] = &data
+	response := map[string]string{
+		"message":    "session created succesfully",
+		"session_id": newCode,
+	}
+	json.NewEncoder(w).Encode(&response)
+}
+
+type JoinSessionPayload struct {
+	Code      string `json:"code"`
+	SessionId string `json:"session_id"`
+}
+
+func (c *Controller) JoinSession(w http.ResponseWriter, r *http.Request) {
+	// data := JoinSessionPayload{}
+	sessionId := r.PathValue("id")
+
+	// if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	// 	fmt.Println("error while reading body")
+	// 	json.NewEncoder(w).Encode(map[string]string{
+	// 		"error": "failed to parse body",
+	// 	})
+	// }
+	//
+	if data, ok := ActiveSessions[sessionId]; ok {
+		data.State = "completed"
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "session found succesfully",
+		})
+	} else {
+		fmt.Println("session not found")
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "invalid or expired session",
+		})
 	}
 }

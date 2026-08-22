@@ -19,7 +19,7 @@ export default defineConfig(({ command }) => {
           port: 5173,
           proxy: {
             "/api": {
-              target: "http://localhost:8000", // dev backend container
+              target: "http://localhost:3000", // dev Go signaling server
               changeOrigin: true,
               rewrite: (path) => path.replace(/^\/api/, ""), // remove /api only in dev
             },

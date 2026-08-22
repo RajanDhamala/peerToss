@@ -1,196 +1,351 @@
-import { useEffect, useState } from "react"
+import { useCallback, useState } from "react"
+import { QRCodeSVG } from "qrcode.react"
+import toast from "react-hot-toast"
+import {
+  ArrowRight,
+  Copy,
+  Loader2,
+  Moon,
+  QrCode,
+  ScanLine,
+  Send,
+  Sun,
+} from "lucide-react"
+
+import { useTheme } from "@/hooks/useTheme"
+import useUserStore, { type AppWebSocket } from "@/UserStore"
+import QrScanner from "@/components/QrScanner"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+
+const API_BASE = import.meta.env.VITE_API_URL || "/api"
+
+type CreatedSession = {
+  session_id: string
+  Code: string
+}
 
 const LandingPage = () => {
-  const [ws, setWs] = useState<WebSocket | null>(null)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isConnected, setIsConnected] = useState(false)
+  const { theme, toggleTheme } = useTheme()
+  const ws = useUserStore((state) => state.ws)
+  const setWs = useUserStore((state) => state.setWs)
 
-  const connectWs = () => {
-    if (isConnecting || isConnected) return
+  // Create-session flow
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [closeSessionConfirmOpen, setCloseSessionConfirmOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [session, setSession] = useState<CreatedSession | null>(null)
 
-    setIsConnecting(true)
+  // Join-session flow
+  const [joinOpen, setJoinOpen] = useState(false)
+  const [joinCode, setJoinCode] = useState("")
+  const [joining, setJoining] = useState(false)
+  const [joinedSession, setJoinedSession] = useState<string | null>(null)
+  const [joinMode, setJoinMode] = useState<"code" | "scan">("code")
 
-    const instance = new WebSocket("ws://localhost:3000/ws")
+  const handleCreateSession = async () => {
+    setCreating(true)
+    try {
+      const res = await fetch(`${API_BASE}/createSession`)
+      const body = await res.json()
+      if (!res.ok || body.error) {
+        throw new Error(body.error || "failed to create session")
+      }
+      setSession({
+        session_id: body.session_id,
+        Code: body.Code,
+      })
+      const socket = new WebSocket("ws://localhost:3000/ws") as AppWebSocket
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") return
 
-    instance.onopen = () => {
-      console.log("connected")
-
-      setIsConnecting(false)
-      setIsConnected(true)
-      setWs(instance)
-    }
-
-    instance.onerror = (err) => {
-      console.log("failed websocket connection:", err)
-      setIsConnecting(false)
-    }
-
-    instance.onclose = () => {
-      console.log("websocket disconnected")
-
-      setIsConnected(false)
-      setIsConnecting(false)
-      setWs(null)
-    }
-
-    instance.onmessage = (event) => {
-      console.log("server:", event.data)
+        try {
+          const message = JSON.parse(event.data) as { SocketId?: unknown }
+          if (typeof message.SocketId === "string") {
+            socket.id = message.SocketId
+            setWs(socket)
+          }
+        } catch {
+          return
+        }
+      })
+      setWs(socket)
+      setConfirmOpen(false)
+    } catch (err) {
+      toast.error("Could not create session. Is the server running?")
+      console.error(err)
+    } finally {
+      setCreating(false)
     }
   }
 
-  const handleSendEvent = (event: string) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.log("websocket is not connected")
+  const handleCloseSession = () => {
+    ws?.close()
+    setWs(null)
+    setSession(null)
+    setCloseSessionConfirmOpen(false)
+  }
+
+  const handleJoinSession = async (rawCode?: string) => {
+    const code = (rawCode ?? joinCode).trim()
+    if (!code) {
+      toast.error("Enter a session code first")
       return
     }
-
-    ws.send(
-      JSON.stringify({
-        event,
-        data: `from ${event} endpoint`,
-      }),
-    )
+    setJoining(true)
+    try {
+      const res = await fetch(`${API_BASE}/JoinSession/${encodeURIComponent(code)}`)
+      const body = await res.json()
+      if (!res.ok || body.error) {
+        throw new Error(body.error || "invalid or expired session")
+      }
+      setJoinedSession(code)
+      setJoinOpen(false)
+      toast.success("Session found — paired up")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "failed to join session")
+    } finally {
+      setJoining(false)
+    }
   }
 
-  useEffect(() => {
-    return () => {
-      ws?.close()
+  // The QR encodes the session ID directly.
+  const handleQrDetect = useCallback((value: string) => {
+    const code = value.trim()
+    setJoinCode(code)
+    handleJoinSession(code)
+    // handleJoinSession always joins with the explicit code argument; its
+    // closure over joinCode is never read on this path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const shareUrl = session?.session_id ?? ""
+
+  const copy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success(`${label} copied`)
+    } catch {
+      toast.error("Could not copy")
     }
-  }, [ws])
+  }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-white">
-      <div className="mx-auto flex min-h-screen max-w-5xl items-center px-6 py-16">
-        <div className="grid w-full gap-8 lg:grid-cols-[1.2fr_0.8fr]">
+    <main className="min-h-screen bg-background text-foreground">
+      {/* Theme toggle — the only chrome on the page */}
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={toggleTheme}
+        aria-label="Toggle theme"
+        className="absolute top-5 right-5"
+      >
+        {theme === "dark" ? <Sun /> : <Moon />}
+      </Button>
 
-          <section className="flex flex-col justify-center">
-            <div className="mb-5 flex items-center gap-2">
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${isConnected
-                  ? "bg-emerald-400"
-                  : isConnecting
-                    ? "bg-amber-400"
-                    : "bg-zinc-600"
-                  }`}
-              />
+      <div className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-6 py-16 text-center">
 
-              <span className="text-sm text-zinc-400">
-                {isConnected
-                  ? "WebSocket connected"
-                  : isConnecting
-                    ? "Connecting..."
-                    : "WebSocket disconnected"}
-              </span>
-            </div>
+        <div className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+          <Send className="size-6" />
+        </div>
 
-            <h1 className="max-w-xl text-4xl font-semibold tracking-tight sm:text-6xl">
-              Gorilla WebSocket
-              <span className="block text-zinc-500">event playground.</span>
-            </h1>
+        <h1 className="mt-8 text-4xl font-semibold tracking-tight sm:text-5xl">
+          PeerToss
+        </h1>
+        <p className="mt-4 max-w-md text-balance text-muted-foreground">
+          Toss files, links, and clipboard text straight to another device —
+          no accounts, no uploads.
+        </p>
 
-            <p className="mt-6 max-w-lg text-base leading-7 text-zinc-400">
-              Connect to your Go WebSocket server and send different event
-              payloads directly from the browser.
+        {joinedSession ? (
+          <div className="mt-10 flex flex-col items-center gap-3 rounded-xl border bg-card px-8 py-6">
+            <p className="text-sm text-muted-foreground">
+              Connected to session
             </p>
+            <p className="font-mono text-lg font-medium">{joinedSession}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setJoinedSession(null)}
+            >
+              Leave session
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+            <Button size="lg" onClick={() => setConfirmOpen(true)}>
+              <QrCode />
+              Start Sharing
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => setJoinOpen(true)}
+            >
+              Join Session
+              <ArrowRight />
+            </Button>
+          </div>
+        )}
 
-            <div className="mt-8">
-              <button
-                onClick={connectWs}
-                disabled={isConnecting || isConnected}
-                className="rounded-lg bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+        {/* Confirmation before creating a session */}
+        <Dialog
+          open={confirmOpen}
+          onOpenChange={(open) => !creating && setConfirmOpen(open)}
+        >
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Start a sharing session?</DialogTitle>
+              <DialogDescription>
+                We'll create a temporary session and generate a QR code the
+                other device can scan to join you.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                onClick={() => setConfirmOpen(false)}
+                disabled={creating}
               >
-                {isConnecting
-                  ? "Connecting..."
-                  : isConnected
-                    ? "Connected"
-                    : "Connect WebSocket"}
+                Cancel
+              </Button>
+              <Button onClick={handleCreateSession} disabled={creating}>
+                {creating && <Loader2 className="animate-spin" />}
+                {creating ? "Creating..." : "Create Session"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* QR + pairing code after session is created */}
+        <Dialog
+          open={session !== null}
+          onOpenChange={(open) => !open && setCloseSessionConfirmOpen(true)}
+        >
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Scan to join</DialogTitle>
+              <DialogDescription>
+                Let the other device scan this code, or share the pairing code
+                below. The session is temporary and expires on its own.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-col items-center gap-4">
+              <div className="rounded-xl border bg-white p-4">
+                <QRCodeSVG value={shareUrl} size={176} />
+              </div>
+
+              <button
+                onClick={() => copy(session?.session_id ?? "", "Pairing code")}
+                className="group flex items-center gap-2 rounded-lg border bg-muted px-4 py-2 font-mono text-sm font-medium tracking-widest transition hover:bg-accent"
+              >
+                {session?.session_id}
+                <Copy className="size-3.5 opacity-50 transition group-hover:opacity-100" />
               </button>
             </div>
-          </section>
 
-          {/* Event panel */}
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 shadow-2xl shadow-black/20">
-            <div className="mb-6">
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
-                Event Console
-              </p>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setCloseSessionConfirmOpen(true)}
+              >
+                Done
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-              <h2 className="mt-2 text-xl font-semibold">
-                Send an event
-              </h2>
+        <Dialog
+          open={closeSessionConfirmOpen}
+          onOpenChange={setCloseSessionConfirmOpen}
+        >
+          <DialogContent className="sm:left-[calc(50%+4rem)] sm:top-[52%] sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Disconnect this session?</DialogTitle>
+              <DialogDescription>
+                Closing this session will disconnect its WebSocket connection.
+                You'll need to create a new session to reconnect.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                onClick={() => setCloseSessionConfirmOpen(false)}
+              >
+                Keep session
+              </Button>
+              <Button variant="destructive" onClick={handleCloseSession}>
+                Disconnect
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-              <p className="mt-1 text-sm text-zinc-500">
-                Each button sends a JSON payload to the Go server.
-              </p>
-            </div>
+        {/* Join with a code or a QR scan */}
+        <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Join a session</DialogTitle>
+              <DialogDescription>
+                {joinMode === "code"
+                  ? "Enter the pairing code or session ID you received from the other device."
+                  : "Point your camera at the QR code shown on the other device."}
+              </DialogDescription>
+            </DialogHeader>
 
-            <div className="space-y-3">
-              <EventButton
-                name="base"
-                description="Send base event"
-                disabled={!isConnected}
-                onClick={() => handleSendEvent("base")}
+            {joinMode === "code" ? (
+              <Input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleJoinSession()}
+                placeholder="Session code"
+                className="text-center font-mono"
+                autoFocus
               />
+            ) : (
+              <QrScanner onDetect={handleQrDetect} />
+            )}
 
-              <EventButton
-                name="test"
-                description="Send test event"
-                disabled={!isConnected}
-                onClick={() => handleSendEvent("test")}
-              />
+            <DialogFooter className="sm:justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setJoinMode((m) => (m === "code" ? "scan" : "code"))}
+                disabled={joining}
+              >
+                <ScanLine />
+                {joinMode === "code" ? "Scan QR instead" : "Enter code instead"}
+              </Button>
 
-              <EventButton
-                name="demo"
-                description="Send demo event"
-                disabled={!isConnected}
-                onClick={() => handleSendEvent("demo")}
-              />
-            </div>
-
-            <div className="mt-6 rounded-xl border border-zinc-800 bg-black/30 p-4 font-mono text-xs text-zinc-400">
-              <span className="text-zinc-600">endpoint</span>
-              <span className="ml-2">ws://localhost:3000/ws</span>
-            </div>
-          </section>
-        </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setJoinOpen(false)}
+                  disabled={joining}
+                >
+                  Cancel
+                </Button>
+                {joinMode === "code" && (
+                  <Button onClick={() => handleJoinSession()} disabled={joining}>
+                    {joining && <Loader2 className="animate-spin" />}
+                    {joining ? "Joining..." : "Join"}
+                  </Button>
+                )}
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </main>
-  )
-}
-
-type EventButtonProps = {
-  name: string
-  description: string
-  disabled?: boolean
-  onClick: () => void
-}
-
-const EventButton = ({
-  name,
-  description,
-  disabled,
-  onClick,
-}: EventButtonProps) => {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="group flex w-full items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-4 text-left transition hover:border-zinc-700 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      <div>
-        <p className="font-mono text-sm text-zinc-100">
-          {name}
-        </p>
-
-        <p className="mt-1 text-xs text-zinc-500">
-          {description}
-        </p>
-      </div>
-
-      <span className="text-zinc-600 transition group-hover:translate-x-1 group-hover:text-white">
-        →
-      </span>
-    </button>
   )
 }
 
