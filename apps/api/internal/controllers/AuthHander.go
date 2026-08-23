@@ -11,10 +11,6 @@ import (
 	utils "http-server/internal/utils"
 )
 
-type contextKey string
-
-const userContextKey contextKey = "user"
-
 func (c *Controller) InitUser(w http.ResponseWriter, r *http.Request) {
 	newUserId := uuid.NewString()
 
@@ -35,17 +31,22 @@ func (c *Controller) InitUser(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  time.Now().Add(24 * 3 * time.Hour),
 	})
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "user created successfully",
+	})
 }
 
 func (c *Controller) GetMe(w http.ResponseWriter, r *http.Request) {
-	user, ok := r.Context().Value(userContextKey).(*utils.UserJWT)
-
+	user, ok := r.Context().Value(utils.UserKey).(*utils.UserJWT)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
+
 	fmt.Println("user id:", user.ID)
+
 	json.NewEncoder(w).Encode(map[string]string{
-		"meesge":  "user id found in cookie",
-		"uder_id": user.ID,
+		"message": "user id found in cookie",
+		"user_id": user.ID,
 	})
 }

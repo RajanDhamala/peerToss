@@ -2,26 +2,24 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"http-server/internal/utils"
 )
 
-type contextKey string
-
-const userContextKey contextKey = "user"
-
 func Auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if cookie, err := r.Cookie("session_id"); err == nil {
+		if cookie, err := r.Cookie("client_id"); err == nil {
 			claims, err := utils.VerifyUserToken(cookie.Value)
 
 			if err == nil {
 				ctx := context.WithValue(
 					r.Context(),
-					userContextKey,
+					utils.UserKey,
 					claims,
 				)
+				fmt.Println("userid:", claims.ID)
 
 				next(w, r.WithContext(ctx))
 				return
