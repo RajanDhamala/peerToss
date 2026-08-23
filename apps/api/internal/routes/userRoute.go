@@ -9,11 +9,11 @@ import (
 )
 
 func UserRouter(app *http.ServeMux, ctrl *controller.Controller) {
-	app.HandleFunc("GET /ws", ctrl.WsHandler)
+	app.HandleFunc("GET /ws", middleware.Auth(middleware.CheckSession(ctrl.WsHandler)))
 
-	app.HandleFunc("GET /createSession", ctrl.CreateSession)
+	app.HandleFunc("GET /createSession", middleware.Auth(ctrl.CreateSession))
 
-	app.HandleFunc("GET /JoinSession/{id}", ctrl.JoinSession)
+	app.HandleFunc("GET /JoinSession/{id}", middleware.Auth(ctrl.JoinSession))
 
 	app.HandleFunc("GET /init", ctrl.InitUser)
 

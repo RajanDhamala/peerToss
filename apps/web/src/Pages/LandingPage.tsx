@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react"
+import { Link } from "react-router"
 import { QRCodeSVG } from "qrcode.react"
 import toast from "react-hot-toast"
 import {
@@ -27,10 +28,19 @@ import {
 import { Input } from "@/components/ui/input"
 
 const API_BASE = import.meta.env.VITE_API_URL || "/api"
+const WS_URL =
+  import.meta.env.VITE_WS_URL ||
+  `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws`
 
 type CreatedSession = {
   session_id: string
   Code: string
+}
+
+type WsMessage = {
+  SocketId?: unknown
+  event?: string
+  data?: { user2?: string }
 }
 
 const LandingPage = () => {
@@ -63,18 +73,32 @@ const LandingPage = () => {
         session_id: body.session_id,
         Code: body.Code,
       })
-      const socket = new WebSocket("ws://localhost:3000/ws") as AppWebSocket
+      const socket = new WebSocket(WS_URL) as AppWebSocket
       socket.addEventListener("message", (event) => {
         if (typeof event.data !== "string") return
 
+        let msg: WsMessage
         try {
-          const message = JSON.parse(event.data) as { SocketId?: unknown }
-          if (typeof message.SocketId === "string") {
-            socket.id = message.SocketId
-            setWs(socket)
-          }
+          msg = JSON.parse(event.data)
         } catch {
           return
+        }
+
+        console.log("ws message:", msg)
+
+        if (typeof msg.SocketId === "string") {
+          socket.id = msg.SocketId
+          setWs(socket)
+          return
+        }
+
+        if (msg.event === "user-joined") {
+          console.log("User2 joined:", msg.data?.user2)
+          toast.success(`User2 joined: ${msg.data?.user2 ?? "someone"}`)
+        } else if (msg.event == "user-left") {
+          console.log("user left the room", msg.data)
+        }else if (msg.event=="recieve-offer"){
+          console.log("got the web rtc offer btw",data)
         }
       })
       setWs(socket)
@@ -107,6 +131,23 @@ const LandingPage = () => {
       if (!res.ok || body.error) {
         throw new Error(body.error || "invalid or expired session")
       }
+
+      const socket = new WebSocket(WS_URL) as AppWebSocket
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") return
+
+        try {
+          const message = JSON.parse(event.data) as { SocketId?: unknown }
+          if (typeof message.SocketId === "string") {
+            socket.id = message.SocketId
+            setWs(socket)
+          }
+        } catch {
+          return
+        }
+      })
+      setWs(socket)
+
       setJoinedSession(code)
       setJoinOpen(false)
       toast.success("Session found — paired up")
@@ -196,6 +237,14 @@ const LandingPage = () => {
           </div>
         )}
 
+        {/* WebRTC handshake practice lives on its own page */}
+        <Link
+          to="/rtc"
+          className="mt-6 text-sm text-muted-foreground underline-offset-4 transition hover:text-foreground hover:underline"
+        >
+          practice the WebRTC handshake →
+        </Link>
+
         {/* Confirmation before creating a session */}
         <Dialog
           open={confirmOpen}
@@ -254,6 +303,14 @@ const LandingPage = () => {
             </div>
 
             <DialogFooter>
+              <Link to="/rtc">
+             <Button
+                variant="outline"
+                onClick={() => setCloseSessionConfirmOpen(true)}
+              >
+                rtc page
+                </Button>
+              </Link>
               <Button
                 variant="outline"
                 onClick={() => setCloseSessionConfirmOpen(true)}
