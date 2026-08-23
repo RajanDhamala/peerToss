@@ -21,6 +21,7 @@ export default defineConfig(({ command }) => {
             "/api": {
               target: "http://localhost:3000", // dev Go signaling server
               changeOrigin: true,
+              ws: true,
               rewrite: (path) => path.replace(/^\/api/, ""), // remove /api only in dev
             },
           },
