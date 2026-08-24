@@ -39,7 +39,7 @@ export function onIncomingChannel(
 
 // --- exchange helpers (call these from your ws message handler) ---
 
-export async function createOffer(pc: RTCPeerConnection): Promise<RTCSessionDescription> {
+export async function createOffer(pc: RTCPeerConnection): Promise<RTCSessionDescriptionInit> {
   const offer = await pc.createOffer()
   await pc.setLocalDescription(offer)
   return offer
@@ -48,7 +48,7 @@ export async function createOffer(pc: RTCPeerConnection): Promise<RTCSessionDesc
 export async function acceptOffer(
   pc: RTCPeerConnection,
   offer: RTCSessionDescription
-): Promise<RTCSessionDescription> {
+): Promise<RTCSessionDescriptionInit> {
   await pc.setRemoteDescription(offer)
   const answer = await pc.createAnswer()
   await pc.setLocalDescription(answer)

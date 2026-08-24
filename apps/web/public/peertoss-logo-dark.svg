@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>PeerToss Pt logo for dark backgrounds</title>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#F7F6F2"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" stroke="#171717" stroke-opacity=".16"/>
+  <path d="M14 45V19h11.2C32 19 36 22.4 36 28s-4 9-10.8 9H14" stroke="#171717" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M46 21v18.5c0 4.4 2.3 6.5 6 6.5" stroke="#171717" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M41.5 29h11" stroke="#9333EA" stroke-width="4.2" stroke-linecap="round"/>
+</svg>

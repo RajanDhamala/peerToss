@@ -118,3 +118,134 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes peer-packet-forward {
+  0% {
+    opacity: 0;
+    transform: translateX(-38px) scale(0.82);
+  }
+  14% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(20px) scale(1);
+  }
+}
+
+@keyframes peer-packet-return {
+  0% {
+    opacity: 0;
+    transform: translateX(29px) scale(0.8);
+  }
+  16% {
+    opacity: 0.9;
+  }
+  82% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-38px) scale(1);
+  }
+}
+
+@keyframes peer-route-glow {
+  0%, 100% {
+    opacity: 0.12;
+    transform: scaleX(0.18);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scaleX(0.92);
+  }
+}
+
+@keyframes peer-transfer-hub {
+  0%, 100% {
+    box-shadow: 0 0 0 4px rgb(168 85 247 / 8%);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgb(168 85 247 / 14%);
+  }
+}
+
+.peer-route-glow {
+  animation: peer-route-glow 2.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.peer-packet {
+  will-change: transform, opacity;
+}
+
+.peer-packet-forward {
+  animation: peer-packet-forward 2.35s cubic-bezier(0.42, 0, 0.3, 1) infinite;
+}
+
+.peer-packet-one {
+  animation-delay: -0.25s;
+}
+
+.peer-packet-two {
+  animation-delay: -1.4s;
+}
+
+.peer-packet-return {
+  animation: peer-packet-return 2.8s cubic-bezier(0.42, 0, 0.3, 1) -0.8s infinite;
+}
+
+.peer-transfer-hub {
+  animation: peer-transfer-hub 2.4s ease-in-out infinite;
+}
+
+.peer-connection-card:hover .peer-packet-forward,
+.peer-connection-card:focus-visible .peer-packet-forward {
+  animation-duration: 1.45s;
+}
+
+.peer-connection-card:hover .peer-packet-return,
+.peer-connection-card:focus-visible .peer-packet-return {
+  animation-duration: 1.7s;
+}
+
+.peer-connection-card:hover .peer-device-source,
+.peer-connection-card:focus-visible .peer-device-source {
+  transform: translateX(-2px) translateY(-2px);
+}
+
+.peer-connection-card:hover .peer-device-target,
+.peer-connection-card:focus-visible .peer-device-target {
+  transform: translateX(2px) translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .peer-route-glow,
+  .peer-packet,
+  .peer-transfer-hub {
+    animation: none;
+  }
+
+  .peer-route-glow {
+    opacity: 0.35;
+    transform: scaleX(0.72);
+  }
+
+  .peer-packet-one {
+    opacity: 1;
+    transform: translateX(-26px);
+  }
+
+  .peer-packet-two {
+    opacity: 1;
+    transform: translateX(18px);
+  }
+
+  .peer-packet-return {
+    opacity: 0.9;
+    transform: translateX(24px);
+  }
+}
