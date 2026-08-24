@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>PeerToss</title>
+  <style>
+    .tile { fill: #171717; }
+    .frame { stroke: #ffffff; }
+    .letter { stroke: #f7f6f2; }
+    .accent { stroke: #a855f7; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #f7f6f2; }
+      .frame { stroke: #171717; }
+      .letter { stroke: #171717; }
+      .accent { stroke: #9333ea; }
+    }
+  </style>
+  <rect class="tile" x="2" y="2" width="60" height="60" rx="16"/>
+  <rect class="frame" x="2.5" y="2.5" width="59" height="59" rx="15.5" stroke-opacity=".16"/>
+  <path class="letter" d="M14 45V19h11.2C32 19 36 22.4 36 28s-4 9-10.8 9H14" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="letter" d="M46 21v18.5c0 4.4 2.3 6.5 6 6.5" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="accent" d="M41.5 29h11" fill="none" stroke-width="4.2" stroke-linecap="round"/>
+</svg>
