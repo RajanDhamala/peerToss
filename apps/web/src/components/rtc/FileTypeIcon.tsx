@@ -1,27 +1,87 @@
 /* eslint-disable react-refresh/only-export-components */
-import type { LucideIcon } from "lucide-react"
+import type { ComponentType, SVGProps } from "react"
+
 import {
-  Braces,
-  Database,
-  File,
-  FileArchive,
-  FileAudio,
-  FileCode2,
-  FileImage,
-  FileJson2,
-  FileSpreadsheet,
-  FileText,
-  FileType2,
-  FileVideo2,
-  GitBranch,
-  Package,
-  Presentation,
-  Terminal,
-} from "lucide-react"
+  CssSvg,
+  CsvSvg,
+  DocSvg,
+  GenericFileSvg,
+  GoSvg,
+  HtmlSvg,
+  IsoSvg,
+  JavaScriptSvg,
+  JpgSvg,
+  Mp3Svg,
+  PdfSvg,
+  PngSvg,
+  PptSvg,
+  PythonSvg,
+  TextSvg,
+  TypeScriptSvg,
+  XmlSvg,
+  ZipSvg,
+} from "@/Utils/Svgs"
+
+type SvgIcon = ComponentType<SVGProps<SVGSVGElement>>
 
 type FileTypeInfo = {
-  Icon: LucideIcon
+  Icon?: SvgIcon
   label: string
+}
+
+const EXTENSION_ICONS: Record<string, SvgIcon> = {
+  css: CssSvg,
+  csv: CsvSvg,
+  doc: DocSvg,
+  docx: DocSvg,
+  go: GoSvg,
+  htm: HtmlSvg,
+  html: HtmlSvg,
+  iso: IsoSvg,
+  js: JavaScriptSvg,
+  jsx: JavaScriptSvg,
+  jpeg: JpgSvg,
+  jpg: JpgSvg,
+  mp3: Mp3Svg,
+  pdf: PdfSvg,
+  png: PngSvg,
+  ppt: PptSvg,
+  pptx: PptSvg,
+  py: PythonSvg,
+  text: TextSvg,
+  ts: TypeScriptSvg,
+  tsx: TypeScriptSvg,
+  txt: TextSvg,
+  xml: XmlSvg,
+  zip: ZipSvg,
+}
+
+const MIME_ICONS: Record<string, { Icon: SvgIcon; label: string }> = {
+  "application/javascript": { Icon: JavaScriptSvg, label: "JS" },
+  "application/msword": { Icon: DocSvg, label: "DOC" },
+  "application/pdf": { Icon: PdfSvg, label: "PDF" },
+  "application/typescript": { Icon: TypeScriptSvg, label: "TS" },
+  "application/vnd.ms-powerpoint": { Icon: PptSvg, label: "PPT" },
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
+    Icon: PptSvg,
+    label: "PPTX",
+  },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    Icon: DocSvg,
+    label: "DOCX",
+  },
+  "application/x-zip-compressed": { Icon: ZipSvg, label: "ZIP" },
+  "application/zip": { Icon: ZipSvg, label: "ZIP" },
+  "audio/mpeg": { Icon: Mp3Svg, label: "MP3" },
+  "image/jpeg": { Icon: JpgSvg, label: "JPG" },
+  "image/png": { Icon: PngSvg, label: "PNG" },
+  "text/css": { Icon: CssSvg, label: "CSS" },
+  "text/csv": { Icon: CsvSvg, label: "CSV" },
+  "text/html": { Icon: HtmlSvg, label: "HTML" },
+  "text/javascript": { Icon: JavaScriptSvg, label: "JS" },
+  "text/plain": { Icon: TextSvg, label: "TXT" },
+  "text/typescript": { Icon: TypeScriptSvg, label: "TS" },
+  "text/xml": { Icon: XmlSvg, label: "XML" },
 }
 
 const ARCHIVE_EXTENSIONS = new Set([
@@ -98,6 +158,7 @@ function extensionLabel(extension: string, fallback: string) {
 function getFileTypeInfo(name = "", mime = ""): FileTypeInfo {
   const fileName = name.split(/[\\/]/).at(-1)?.toLocaleLowerCase() ?? ""
   const extension = fileName.includes(".") ? fileName.split(".").at(-1) ?? "" : ""
+  const normalizedMime = mime.toLocaleLowerCase().split(";")[0].trim()
 
   if (
     fileName === ".gitignore" ||
@@ -105,58 +166,75 @@ function getFileTypeInfo(name = "", mime = ""): FileTypeInfo {
     fileName === ".gitmodules" ||
     fileName.startsWith(".git")
   ) {
-    return { Icon: GitBranch, label: "GIT" }
+    return { label: "GIT" }
   }
   if (["dockerfile", "makefile", "justfile"].includes(fileName)) {
-    return { Icon: Terminal, label: "CODE" }
-  }
-  if (ARCHIVE_EXTENSIONS.has(extension)) {
-    return { Icon: FileArchive, label: extensionLabel(extension, "ZIP") }
-  }
-  if (SHELL_EXTENSIONS.has(extension)) {
-    return { Icon: Terminal, label: extensionLabel(extension, "SHELL") }
-  }
-  if (CODE_EXTENSIONS.has(extension)) {
-    return { Icon: FileCode2, label: extensionLabel(extension, "CODE") }
-  }
-  if (extension === "json") {
-    return { Icon: FileJson2, label: "JSON" }
-  }
-  if (CONFIG_EXTENSIONS.has(extension)) {
-    return { Icon: Braces, label: extensionLabel(extension, "CONFIG") }
-  }
-  if (extension === "pdf") {
-    return { Icon: FileType2, label: "PDF" }
-  }
-  if (SLIDE_EXTENSIONS.has(extension)) {
-    return { Icon: Presentation, label: extensionLabel(extension, "PPT") }
-  }
-  if (SHEET_EXTENSIONS.has(extension)) {
-    return { Icon: FileSpreadsheet, label: extensionLabel(extension, "XLS") }
-  }
-  if (DOCUMENT_EXTENSIONS.has(extension)) {
-    return { Icon: FileText, label: extensionLabel(extension, "DOC") }
-  }
-  if (TEXT_EXTENSIONS.has(extension)) {
-    return { Icon: FileText, label: extensionLabel(extension, "TEXT") }
-  }
-  if (IMAGE_EXTENSIONS.has(extension) || mime.startsWith("image/")) {
-    return { Icon: FileImage, label: extensionLabel(extension, "IMAGE") }
-  }
-  if (AUDIO_EXTENSIONS.has(extension) || mime.startsWith("audio/")) {
-    return { Icon: FileAudio, label: extensionLabel(extension, "AUDIO") }
-  }
-  if (VIDEO_EXTENSIONS.has(extension) || mime.startsWith("video/")) {
-    return { Icon: FileVideo2, label: extensionLabel(extension, "VIDEO") }
-  }
-  if (DATABASE_EXTENSIONS.has(extension)) {
-    return { Icon: Database, label: extensionLabel(extension, "DB") }
-  }
-  if (PACKAGE_EXTENSIONS.has(extension)) {
-    return { Icon: Package, label: extensionLabel(extension, "PKG") }
+    return { label: fileName.slice(0, 6).toUpperCase() }
   }
 
-  return { Icon: File, label: extensionLabel(extension, "FILE") }
+  const extensionIcon = EXTENSION_ICONS[extension]
+  if (extensionIcon) {
+    return { Icon: extensionIcon, label: extensionLabel(extension, "FILE") }
+  }
+
+  if (ARCHIVE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "ZIP") }
+  }
+  if (SHELL_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "SHELL") }
+  }
+  if (CODE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "CODE") }
+  }
+  if (extension === "json") {
+    return { label: "JSON" }
+  }
+  if (CONFIG_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "CONFIG") }
+  }
+  if (SLIDE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "PPT") }
+  }
+  if (SHEET_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "XLS") }
+  }
+  if (DOCUMENT_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "DOC") }
+  }
+  if (TEXT_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "TEXT") }
+  }
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "IMAGE") }
+  }
+  if (AUDIO_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "AUDIO") }
+  }
+  if (VIDEO_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "VIDEO") }
+  }
+  if (DATABASE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "DB") }
+  }
+  if (PACKAGE_EXTENSIONS.has(extension)) {
+    return { label: extensionLabel(extension, "PKG") }
+  }
+
+  const mimeIcon = MIME_ICONS[normalizedMime]
+  if (mimeIcon) {
+    return mimeIcon
+  }
+  if (normalizedMime.startsWith("image/")) {
+    return { label: extensionLabel(extension, "IMAGE") }
+  }
+  if (normalizedMime.startsWith("audio/")) {
+    return { label: extensionLabel(extension, "AUDIO") }
+  }
+  if (normalizedMime.startsWith("video/")) {
+    return { label: extensionLabel(extension, "VIDEO") }
+  }
+
+  return { label: extensionLabel(extension, "FILE") }
 }
 
 function FileTypeIcon({
@@ -168,7 +246,18 @@ function FileTypeIcon({
   mime?: string
   className?: string
 }) {
-  const { Icon } = getFileTypeInfo(name, mime)
+  const { Icon, label } = getFileTypeInfo(name, mime)
+
+  if (!Icon) {
+    return (
+      <GenericFileSvg
+        fileType={label}
+        className={className}
+        aria-hidden="true"
+      />
+    )
+  }
+
   return <Icon className={className} aria-hidden="true" />
 }
 

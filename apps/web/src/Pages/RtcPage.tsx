@@ -1,23 +1,28 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState } from "react"
+import MessageComponent from "@/components/rtc/MessageComponet"
+
 import { toast } from "react-hot-toast"
 import { Link } from "react-router"
 import {
   ArrowLeft,
   ArrowUpRight,
-  Check,
-  ChevronDown,
-  Download,
+  Gauge,
   Loader2,
+  MessageCircle,
   Radio,
-  Search,
   Upload,
 } from "lucide-react"
 
 import useUserStore from "@/UserStore"
-import { FileShareDialog, type ShareMode } from "@/components/rtc/FileShareDialog"
-import { FileTypeIcon } from "@/components/rtc/FileTypeIcon"
+import { ManifestPanel } from "@/components/rtc/ManifestPanel"
 import { SpeedMeter, type SpeedDirection } from "@/components/rtc/SpeedMeter"
 import { formatBytes, type ChatItem } from "@/components/rtc/types"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 const SAFE_FILE_CHUNK_SIZE = 16 * 1024
 const MAX_BUFFERED_AMOUNT = 1024 * 1024
@@ -25,18 +30,6 @@ const BUFFERED_AMOUNT_LOW_THRESHOLD = 256 * 1024
 const PROGRESS_REPORT_INTERVAL = 256 * 1024
 const SPEED_TEST_SAMPLE_SIZE = 4 * 1024 * 1024
 const SPEED_TEST_CHUNK_SIZE = 16 * 1024
-
-const SORT_LABELS = {
-  recent: "Most recent",
-  oldest: "Oldest first",
-  largest: "Largest first",
-  smallest: "Smallest first",
-  name: "Name A–Z",
-} as const
-
-type SortMode = keyof typeof SORT_LABELS
-type PillTone = "ink" | "amber" | "teal" | "coral" | "line"
-type TransferStatus = NonNullable<ChatItem["transferStatus"]>
 
 type IncomingTransfer = {
   fileId: string
@@ -65,133 +58,6 @@ type SpeedTestControlMessage = {
   message?: unknown
 }
 
-const STATUS_META: Record<
-  TransferStatus,
-  { label: string; tone: Exclude<PillTone, "ink" | "line"> }
-> = {
-  sending: { label: "Sending", tone: "amber" },
-  receiving: { label: "Receiving", tone: "amber" },
-  complete: { label: "Delivered", tone: "teal" },
-  failed: { label: "Failed", tone: "coral" },
-}
-
-function formatAgo(timestamp: number) {
-  const seconds = Math.floor(Math.max(0, Date.now() - timestamp) / 1000)
-  if (seconds < 60) return "just now"
-
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-
-  return `${Math.floor(hours / 24)}d ago`
-}
-
-function Pill({
-  tone = "ink",
-  children,
-}: {
-  tone?: PillTone
-  children: ReactNode
-}) {
-  const tones: Record<PillTone, string> = {
-    ink: "bg-[#14171F] text-[#F5F4F0]",
-    amber: "bg-[#FBEAD2] text-[#9A5E12]",
-    teal: "bg-[#DFF3EE] text-[#0F6E5D]",
-    coral: "bg-[#FBE3DF] text-[#B23B27]",
-    line: "border border-[#E4E1DA] bg-white text-[#4B5160]",
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${tones[tone]}`}
-    >
-      {children}
-    </span>
-  )
-}
-
-function TrackDot({ progress, tone }: { progress: number; tone: PillTone }) {
-  const toneColor =
-    tone === "teal" ? "#16947F" : tone === "coral" ? "#E85C4A" : "#F2A33C"
-  const safeProgress = Math.min(100, Math.max(0, progress))
-
-  return (
-    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-[#ECE9E1]">
-      <div
-        className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-out"
-        style={{ width: `${safeProgress}%`, backgroundColor: toneColor }}
-      />
-      <div
-        className="absolute top-1/2 size-2.5 -translate-y-1/2 rounded-full ring-2 ring-white transition-[left] duration-500 ease-out"
-        style={{
-          left: `calc(${safeProgress}% - 5px)`,
-          backgroundColor: toneColor,
-        }}
-      />
-    </div>
-  )
-}
-
-function ManifestTransferRow({ item }: { item: ChatItem }) {
-  const status = item.transferStatus ?? "complete"
-  const meta = STATUS_META[status]
-  const size = item.size ?? 0
-  const transferredBytes =
-    status === "complete" ? size : Math.min(item.transferredBytes ?? 0, size)
-  const progress = status === "complete" ? 100 : size ? (transferredBytes / size) * 100 : 0
-  const active = status === "sending" || status === "receiving"
-  const statusLabel = status === "complete" && !item.mine ? "Received" : meta.label
-
-  return (
-    <article className="group flex items-center gap-3 rounded-xl border border-[#E4E1DA] bg-white px-3 py-3.5 transition-colors hover:border-[#D8D4C9] sm:gap-4 sm:px-4">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#F5F4F0] text-[#4B5160]">
-        <FileTypeIcon name={item.name} mime={item.mime} className="size-[18px]" />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-3">
-          <p className="truncate text-sm font-medium text-[#14171F]">
-            {item.name ?? "Shared file"}
-          </p>
-          <span className="ptx-mono hidden shrink-0 text-[11px] text-[#8A8776] sm:inline">
-            {formatAgo(item.ts)}
-          </span>
-        </div>
-
-        <div className="mt-2 flex items-center gap-3">
-          <div className="min-w-16 flex-1">
-            <TrackDot progress={progress} tone={meta.tone} />
-          </div>
-          <span className="ptx-mono hidden w-[108px] shrink-0 text-right text-[11px] text-[#8A8776] md:inline">
-            {formatBytes(transferredBytes)} / {formatBytes(size)}
-          </span>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Pill tone={meta.tone}>
-          {active && <Loader2 className="size-3 animate-spin" />}
-          {status === "complete" && <Check className="size-3" />}
-          <span className="hidden sm:inline">{statusLabel}</span>
-        </Pill>
-
-        {status === "complete" && item.url && (
-          <a
-            href={item.url}
-            download={item.name}
-            className="flex size-8 items-center justify-center rounded-lg text-[#4B5160] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
-            aria-label={`Download ${item.name ?? "file"}`}
-          >
-            <Download className="size-4" strokeWidth={1.75} />
-          </a>
-        )}
-      </div>
-    </article>
-  )
-}
-
 function RtcPage() {
   const ws = useUserStore((state) => state.ws)
 
@@ -204,25 +70,23 @@ function RtcPage() {
   // Retained for the existing chat data-channel handler.
   const [draft, setDraft] = useState("")
   const [messages, setMessages] = useState<ChatItem[]>([])
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [shareMode, setShareMode] = useState<ShareMode>("file")
-  const [fileDialogOpen, setFileDialogOpen] = useState(false)
   const [draggingFile, setDraggingFile] = useState(false)
   const [sendingFile, setSendingFile] = useState(false)
-  const [query, setQuery] = useState("")
-  const [sort, setSort] = useState<SortMode>("recent")
-  const [sortOpen, setSortOpen] = useState(false)
   const [uploadMbps, setUploadMbps] = useState<number | null>(null)
   const [downloadMbps, setDownloadMbps] = useState<number | null>(null)
   const [speedTestRunning, setSpeedTestRunning] = useState(false)
   const [speedTestDirection, setSpeedTestDirection] =
     useState<SpeedDirection | null>(null)
   const [speedTestWaiting, setSpeedTestWaiting] = useState(false)
+  const [mobileSpeedOpen, setMobileSpeedOpen] = useState(false)
+  const [mobileChatOpen, setMobileChatOpen] = useState(false)
   const incomingRef = useRef<IncomingTransfer | null>(null)
   const fileChannelRef = useRef<RTCDataChannel | null>(null)
   const outgoingFileRef = useRef(false)
   const incomingSpeedTestRef = useRef<IncomingSpeedTest | null>(null)
   const speedTestIdRef = useRef<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isMouseOver, setIsMouseOver] = useState(false)
 
   const ICE_CONFIG: RTCConfiguration = {
     // iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -637,32 +501,8 @@ function RtcPage() {
   const channelOpen = chatReady && chatChannel?.readyState === "open"
   const transferChannelOpen = fileReady && fileChannel?.readyState === "open"
   const directConnectionOpen = channelOpen && transferChannelOpen
-  // Retained for the existing message history without rendering it in this workspace.
   const textMessages = messages.filter((item) => item.kind === "text")
   const transfers = messages.filter((item) => item.kind !== "text")
-  void SendMessage
-  void textMessages
-
-  const openFileDialog = (file?: File) => {
-    setShareMode(file?.type.startsWith("image/") ? "image" : "file")
-    setSelectedFile(file ?? null)
-    setFileDialogOpen(true)
-  }
-
-  const handleFileDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    setDraggingFile(false)
-
-    if (!transferChannelOpen || sendingFile || speedTestIdRef.current) {
-      toast.error("Connect to a peer before selecting a file")
-      return
-    }
-
-    const files = Array.from(event.dataTransfer.files)
-    if (!files.length) return
-    if (files.length > 1) toast("Send one file at a time")
-    openFileDialog(files[0])
-  }
 
   const waitForBuffer = (channel: RTCDataChannel) => {
     return new Promise<void>((resolve, reject) => {
@@ -979,8 +819,6 @@ function RtcPage() {
     const fileId = crypto.randomUUID()
     const previewUrl = URL.createObjectURL(file)
 
-    setFileDialogOpen(false)
-    setSelectedFile(null)
     setSendingFile(true)
     outgoingFileRef.current = true
     setMessages((prev) => [
@@ -1038,17 +876,6 @@ function RtcPage() {
     (item) =>
       item.transferStatus === "sending" || item.transferStatus === "receiving"
   ).length
-  const visibleTransfers = [...transfers]
-    .filter((item) =>
-      (item.name ?? "").toLowerCase().includes(query.trim().toLowerCase())
-    )
-    .sort((a, b) => {
-      if (sort === "oldest") return a.ts - b.ts
-      if (sort === "largest") return (b.size ?? 0) - (a.size ?? 0)
-      if (sort === "smallest") return (a.size ?? 0) - (b.size ?? 0)
-      if (sort === "name") return (a.name ?? "").localeCompare(b.name ?? "")
-      return b.ts - a.ts
-    })
 
   const connectionLabel = directConnectionOpen
     ? "Direct link open"
@@ -1118,7 +945,9 @@ function RtcPage() {
           </div>
         </header>
 
-        <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+        <div className="mx-auto w-full max-w-[1536px] px-4 py-8 sm:px-6 sm:py-10">
+          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="min-w-0">
           {/* <div className="mb-8"> */}
           {/*   <p className="ptx-mono text-[11px] uppercase tracking-[0.14em] text-[#8A8776]"> */}
           {/*     Transfer workspace */}
@@ -1167,93 +996,128 @@ function RtcPage() {
           )}
 
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div
-              role="button"
-              tabIndex={canChooseFile ? 0 : -1}
-              aria-disabled={!canChooseFile}
-              onClick={() => {
-                if (canChooseFile) openFileDialog()
-              }}
-              onKeyDown={(event) => {
-                if (
-                  canChooseFile &&
-                  (event.key === "Enter" || event.key === " ")
-                ) {
-                  event.preventDefault()
-                  openFileDialog()
-                }
-              }}
-              onDragEnter={(event) => {
-                event.preventDefault()
-                if (canChooseFile) setDraggingFile(true)
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={() => setDraggingFile(false)}
-              onDrop={handleFileDrop}
-              className={`relative flex min-h-[320px] flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-8 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F5F4F0] ${!canChooseFile
-                ? "cursor-not-allowed border-[#DEDAD1] bg-white/60"
-                : draggingFile
-                  ? "cursor-copy border-[#F2A33C] bg-[#FBEAD2]/40"
-                  : "cursor-pointer border-[#D8D4C9] bg-white hover:border-[#C9C5B8]"
-                }`}
-            >
-              {[
-                "left-4 top-4 border-l-2 border-t-2",
-                "right-4 top-4 border-r-2 border-t-2",
-                "bottom-4 left-4 border-b-2 border-l-2",
-                "bottom-4 right-4 border-b-2 border-r-2",
-              ].map((position) => (
-                <span
-                  key={position}
-                  className={`pointer-events-none absolute size-4 rounded-[3px] border-[#D8D4C9] ${position}`}
-                />
-              ))}
+            <div className="grid gap-5 " >
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                disabled={!canChooseFile}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) {
+                    void handleSendFile(file)
+                  }
+                  event.target.value = ""
+                }}
+              />
 
               <div
-                className={`flex size-14 items-center justify-center rounded-full transition-colors ${draggingFile
-                  ? "bg-[#F2A33C] text-white"
-                  : canChooseFile
-                    ? "bg-[#F5F4F0] text-[#4B5160]"
-                    : "bg-[#ECE9E1] text-[#AAA697]"
+                role="button"
+                tabIndex={canChooseFile ? 0 : -1}
+                aria-disabled={!canChooseFile}
+                onClick={() => {
+                  if (canChooseFile) fileInputRef.current?.click()
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    canChooseFile &&
+                    (event.key === "Enter" || event.key === " ")
+                  ) {
+                    event.preventDefault()
+                    fileInputRef.current?.click()
+                  }
+                }}
+                onMouseOver={() => setIsMouseOver(true)}
+                onMouseOut={() => setIsMouseOver(false)}
+                onDragEnter={(event) => {
+                  event.preventDefault()
+                  if (canChooseFile) setDraggingFile(true)
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => setDraggingFile(false)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDraggingFile(false)
+
+                  if (!canChooseFile) {
+                    toast.error("Connect to a peer before selecting a file")
+                    return
+                  }
+
+                  const files = Array.from(event.dataTransfer.files)
+                  if (!files.length) return
+                  if (files.length > 1) toast("Send one file at a time")
+                  void handleSendFile(files[0])
+                }}
+                className={`relative flex min-h-[320px] flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F5F4F0] ${!canChooseFile
+                  ? "cursor-not-allowed border-[#DEDAD1] bg-white/60"
+                  : draggingFile
+                    ? "cursor-copy border-[#F2A33C] bg-[#FBEAD2]/40"
+                    : "cursor-pointer border-[#D8D4C9] bg-white"
+                  } ${canChooseFile && isMouseOver && !draggingFile
+                    ? "!border-[#7CB88F] !bg-[#EEF6F0] -translate-y-1 shadow-lg shadow-[#7CB88F]/20"
+                    : ""
                   }`}
               >
-                {sendingFile ? (
-                  <Loader2 className="size-6 animate-spin" strokeWidth={1.75} />
-                ) : (
-                  <Upload className="size-6" strokeWidth={1.75} />
-                )}
-              </div>
 
-              <p className="ptx-display mt-5 text-lg font-semibold">
-                {sendingFile
-                  ? "Your file is on its way"
-                  : draggingFile
-                    ? "Release to add it"
+                {[
+                  "left-4 top-4 border-l-2 border-t-2",
+                  "right-4 top-4 border-r-2 border-t-2",
+                  "bottom-4 left-4 border-b-2 border-l-2",
+                  "bottom-4 right-4 border-b-2 border-r-2",
+                ].map((position) => (
+                  <span
+                    key={position}
+                    className={`pointer-events-none absolute size-4 rounded-[3px] border-[#D8D4C9] ${position}`}
+                  />
+                ))}
+
+                <div
+                  className={`flex size-14 items-center justify-center rounded-full transition-colors ${draggingFile
+                    ? "bg-[#F2A33C] text-white"
                     : canChooseFile
-                      ? "Drop a file to toss it over"
-                      : "The launch pad is waiting"}
-              </p>
-              <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[#8A8776]">
-                {canChooseFile
-                  ? "One file at a time — it waits for confirmation before leaving this device."
-                  : "Open the direct file channel, then choose or drop a file here."}
-              </p>
+                      ? "bg-[#F5F4F0] text-[#4B5160]"
+                      : "bg-[#ECE9E1] text-[#AAA697]"
+                    }`}
+                >
+                  {sendingFile ? (
+                    <Loader2 className="size-6 animate-spin" strokeWidth={1.75} />
+                  ) : (
+                    <Upload className="size-6" strokeWidth={1.75} />
+                  )}
+                </div>
 
-              <button
-                type="button"
-                disabled={!canChooseFile}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  if (canChooseFile) openFileDialog()
-                }}
-                className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
-              >
-                Browse files
-                <ArrowUpRight className="size-3.5" />
-              </button>
+                <p className="ptx-display mt-5 text-lg font-semibold">
+                  {sendingFile
+                    ? "Your file is on its way"
+                    : draggingFile
+                      ? "Release to add it"
+                      : canChooseFile
+                        ? "Drop a file to toss it over"
+                        : "The launch pad is waiting"}
+                </p>
+                <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[#8A8776]">
+                  {canChooseFile
+                    ? "One file at a time — it waits for confirmation before leaving this device."
+                    : "Open the direct file channel, then choose or drop a file here."}
+                </p>
+
+                <button
+                  type="button"
+                  disabled={!canChooseFile}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (canChooseFile) fileInputRef.current?.click()
+                  }}
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
+                >
+                  Browse files
+                  <ArrowUpRight className="size-3.5" />
+                </button>
+              </div>
             </div>
             {/* signal section */}
-            <aside className="flex flex-col rounded-2xl border border-[#E4E1DA] bg-white p-5">
+            <aside className="hidden flex-col rounded-2xl border border-[#E4E1DA] bg-white p-5 md:flex">
               <SpeedMeter
                 uploadMbps={uploadMbps}
                 downloadMbps={downloadMbps}
@@ -1268,116 +1132,89 @@ function RtcPage() {
               />
             </aside>
           </div>
-
-          <section className="mt-8 rounded-2xl border border-[#E4E1DA] bg-white p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="ptx-display text-sm font-semibold">Manifest</h2>
-                <p className="text-xs text-[#8A8776]">
-                  Everything sent or received in this room.
-                </p>
-              </div>
-              <Pill tone="line">
-                {activeCount > 0
-                  ? `${activeCount} in flight`
-                  : `${transfers.length} total`}
-              </Pill>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-2.5 sm:flex-row">
-              <label className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#8A8776]" />
-                <span className="sr-only">Search transfers</span>
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search by file name"
-                  className="w-full rounded-xl border border-[#E4E1DA] bg-white py-2.5 pl-9 pr-3 text-sm placeholder:text-[#8A8776] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
-                />
-              </label>
-
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setSortOpen((open) => !open)}
-                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-[#E4E1DA] bg-white px-3.5 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] sm:w-44"
-                  aria-haspopup="menu"
-                  aria-expanded={sortOpen}
-                >
-                  {SORT_LABELS[sort]}
-                  <ChevronDown className="size-4 text-[#8A8776]" />
-                </button>
-
-                {sortOpen && (
-                  <div
-                    role="menu"
-                    className="absolute right-0 z-20 mt-1.5 w-full min-w-44 overflow-hidden rounded-xl border border-[#E4E1DA] bg-white py-1 shadow-lg"
+              <ManifestPanel
+                transfers={transfers}
+                activeCount={activeCount}
+                mobileAction={
+                  <button
+                    type="button"
+                    onClick={() => setMobileSpeedOpen(true)}
+                    className="flex size-8 items-center justify-center rounded-full border border-[#E4E1DA] bg-white text-[#4B5160] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] md:hidden"
+                    aria-label="Open speed test"
                   >
-                    {(Object.entries(SORT_LABELS) as [SortMode, string][]).map(
-                      ([key, label]) => (
-                        <button
-                          key={key}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setSort(key)
-                            setSortOpen(false)
-                          }}
-                          className={`flex w-full items-center justify-between px-3.5 py-2 text-left text-sm hover:bg-[#F5F4F0] ${sort === key
-                            ? "font-medium text-[#14171F]"
-                            : "text-[#4B5160]"
-                            }`}
-                        >
-                          {label}
-                          {sort === key && <Check className="size-3.5" />}
-                        </button>
-                      )
-                    )}
-                  </div>
-                )}
-              </div>
+                    <Gauge className="size-4" strokeWidth={1.75} />
+                  </button>
+                }
+              />
             </div>
 
-            <div className="mt-4 max-h-105 space-y-2.5 overflow-y-auto pr-1">
-              {visibleTransfers.length > 0 ? (
-                visibleTransfers.map((transfer) => (
-                  <ManifestTransferRow key={transfer.id} item={transfer} />
-                ))
-              ) : (
-                <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-[#E4E1DA] px-5 text-center">
-                  {query ? (
-                    <Search className="mb-2 size-5 text-[#8A8776]" />
-                  ) : (
-                    <Upload className="mb-2 size-5 text-[#8A8776]" />
-                  )}
-                  <p className="text-sm font-medium">
-                    {query ? "No matching files" : "No transfers yet"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-[#8A8776]">
-                    {query
-                      ? "Try a different search term."
-                      : "Your first sent or received file will appear here."}
-                  </p>
-                </div>
-              )}
-            </div>
-          </section>
+            <MessageComponent
+              messages={textMessages}
+              draft={draft}
+              connected={channelOpen}
+              onDraftChange={setDraft}
+              inputId="peer-message-draft-desktop"
+              onSend={() => {
+                void SendMessage()
+              }}
+              className="hidden md:flex xl:sticky xl:top-24"
+            />
+          </div>
         </div>
+
+        <button
+          type="button"
+          onClick={() => setMobileChatOpen(true)}
+          className="fixed bottom-4 right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#14171F] text-[#F2A33C] shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 md:hidden"
+          aria-label="Open messages"
+        >
+          <MessageCircle className="size-5" strokeWidth={1.9} />
+        </button>
+
+        <Dialog open={mobileSpeedOpen} onOpenChange={setMobileSpeedOpen}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 md:hidden">
+            <DialogTitle className="sr-only">Direct link speed</DialogTitle>
+            <DialogDescription className="sr-only">
+              Test throughput across the direct WebRTC connection.
+            </DialogDescription>
+            <aside className="flex flex-col bg-white p-5 pt-12">
+              <SpeedMeter
+                uploadMbps={uploadMbps}
+                downloadMbps={downloadMbps}
+                running={speedTestRunning}
+                activeDirection={speedTestDirection}
+                waitingForPeer={speedTestWaiting}
+                disabled={speedTestDisabled}
+                sampleSizeLabel={formatBytes(SPEED_TEST_SAMPLE_SIZE)}
+                onRun={() => {
+                  void runSpeedTest()
+                }}
+              />
+            </aside>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={mobileChatOpen} onOpenChange={setMobileChatOpen}>
+          <DialogContent className="w-[calc(100%-2rem)] gap-0 overflow-hidden p-0 md:hidden">
+            <DialogTitle className="sr-only">Messages</DialogTitle>
+            <DialogDescription className="sr-only">
+              Messages shared across the direct WebRTC connection.
+            </DialogDescription>
+            <MessageComponent
+              messages={textMessages}
+              draft={draft}
+              connected={channelOpen}
+              onDraftChange={setDraft}
+              inputId="peer-message-draft-mobile"
+              onSend={() => {
+                void SendMessage()
+              }}
+              className="max-h-[calc(100dvh-2rem)] border-0"
+            />
+          </DialogContent>
+        </Dialog>
       </div>
 
-      <FileShareDialog
-        open={fileDialogOpen}
-        mode={shareMode}
-        file={selectedFile}
-        onOpenChange={(open) => {
-          setFileDialogOpen(open)
-          if (!open) setSelectedFile(null)
-        }}
-        onFileChange={setSelectedFile}
-        onSend={(file) => {
-          void handleSendFile(file)
-        }}
-      />
     </main>
   )
 }

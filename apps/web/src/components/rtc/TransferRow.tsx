@@ -59,7 +59,7 @@ function TransferRow({
           />
         ) : (
           <div className="flex size-10 shrink-0 items-center justify-center rounded-md border bg-muted">
-            <FileTypeIcon name={item.name} mime={item.mime} className="size-5" />
+            <FileTypeIcon name={item.name} mime={item.mime} className="size-9" />
           </div>
         )}
 
