@@ -1,9 +1,8 @@
 import { useId } from "react"
 import { ArrowDown, ArrowUp, Loader2 } from "lucide-react"
 
+import type { SpeedDirection } from "@/components/rtc/types"
 import { cn } from "@/lib/utils"
-
-type SpeedDirection = "download" | "upload"
 
 const SPEED_STOPS = [0, 5, 10, 50, 100, 250, 500, 750, 1000]
 const DIAL_START = 135
@@ -346,4 +345,5 @@ function SpeedMeter({
   )
 }
 
-export { SpeedMeter, type SpeedDirection }
+export { SpeedMeter }
+export type { SpeedDirection } from "@/components/rtc/types"

@@ -25,6 +25,7 @@ import {
 
 import { useTheme } from "@/hooks/useTheme"
 import useUserStore, { type AppWebSocket } from "@/UserStore"
+import { rtcSession } from "@/global/rtc/RtcSessionController"
 import QrScanner from "@/components/QrScanner"
 import { Button } from "@/components/ui/button"
 import {
@@ -266,16 +267,26 @@ const LandingPage = () => {
       let identified = false
       let failureShown = false
 
-      const failBeforeReady = () => {
-        if (identified || failureShown) return
+      function cleanupBootstrapListeners() {
+        socket.removeEventListener("message", handleBootstrapMessage)
+        socket.removeEventListener("error", failBeforeReady)
+        socket.removeEventListener("close", failBeforeReady)
+      }
+
+      function failBeforeReady() {
+        if (identified || failureShown) {
+          cleanupBootstrapListeners()
+          return
+        }
         failureShown = true
+        cleanupBootstrapListeners()
         setJoining(false)
         setWs(null)
         if (role === "creator") setSession(null)
         toast.error("Could not establish the session connection")
       }
 
-      socket.addEventListener("message", (event) => {
+      function handleBootstrapMessage(event: MessageEvent) {
         if (typeof event.data !== "string") return
 
         let message: WsMessage
@@ -291,6 +302,7 @@ const LandingPage = () => {
           setWs(socket)
 
           if (role === "participant") {
+            cleanupBootstrapListeners()
             setJoining(false)
             setJoinOpen(false)
             toast.success("Connected to the sharing room")
@@ -300,16 +312,13 @@ const LandingPage = () => {
         }
 
         if (role === "creator" && message.event === "user-joined") {
+          cleanupBootstrapListeners()
           toast.success("Your peer joined the room")
           navigate("/rtc", { replace: true })
-          return
         }
+      }
 
-        if (message.event === "user-left") {
-          toast.error("The other device left the room")
-        }
-      })
-
+      socket.addEventListener("message", handleBootstrapMessage)
       socket.addEventListener("error", failBeforeReady)
       socket.addEventListener("close", failBeforeReady)
       setWs(socket)
@@ -340,6 +349,7 @@ const LandingPage = () => {
   }
 
   const handleCloseSession = () => {
+    rtcSession.endSession({ closeSocket: false })
     ws?.close()
     setWs(null)
     setSession(null)

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Check,
   ChevronDown,
@@ -18,6 +18,8 @@ const SORT_LABELS = {
   smallest: "Smallest first",
   name: "Name A–Z",
 } as const
+
+const SHOW_TRANSFER_PROGRESS = false
 
 type SortMode = keyof typeof SORT_LABELS
 type PillTone = "ink" | "amber" | "teal" | "coral" | "line"
@@ -44,6 +46,16 @@ function formatAgo(timestamp: number) {
   if (hours < 24) return `${hours}h ago`
 
   return `${Math.floor(hours / 24)}d ago`
+}
+
+function formatTimeLeft(secondsLeft: number | null) {
+  if (secondsLeft === null || !Number.isFinite(secondsLeft)) {
+    return "Estimating…"
+  }
+  if (secondsLeft < 60) return `${Math.max(1, secondsLeft)}s left`
+  if (secondsLeft < 3600) return `${Math.ceil(secondsLeft / 60)}m left`
+
+  return `${Math.ceil(secondsLeft / 3600)}h left`
 }
 
 function Pill({
@@ -96,12 +108,98 @@ function ManifestTransferRow({ item }: { item: ChatItem }) {
   const status = item.transferStatus ?? "complete"
   const meta = STATUS_META[status]
   const size = item.size ?? 0
-  const transferredBytes =
+  const liveTransferredBytes =
     status === "complete" ? size : Math.min(item.transferredBytes ?? 0, size)
-  const progress =
-    status === "complete" ? 100 : size ? (transferredBytes / size) * 100 : 0
+  const liveProgress =
+    status === "complete" ? 100 : size ? (liveTransferredBytes / size) * 100 : 0
   const active = status === "sending" || status === "receiving"
   const statusLabel = status === "complete" && !item.mine ? "Received" : meta.label
+  const latestTransferredBytesRef = useRef(liveTransferredBytes)
+  const speedSampleRef = useRef<{
+    transferredBytes: number
+    sampledAt: number
+    smoothedBytesPerSecond: number | null
+  } | null>(null)
+  const [displayedStats, setDisplayedStats] = useState(() => ({
+    transferredBytes: liveTransferredBytes,
+    progressPercent: Math.round(liveProgress),
+    timeLeft: "Estimating…",
+  }))
+
+  useEffect(() => {
+    latestTransferredBytesRef.current = liveTransferredBytes
+  }, [liveTransferredBytes])
+
+  useEffect(() => {
+    if (!active) {
+      speedSampleRef.current = null
+      return
+    }
+
+    speedSampleRef.current = {
+      transferredBytes: latestTransferredBytesRef.current,
+      sampledAt: Date.now(),
+      smoothedBytesPerSecond: null,
+    }
+
+    const timer = window.setInterval(() => {
+      const sampledAt = Date.now()
+      const transferredBytes = latestTransferredBytesRef.current
+      const previousSample = speedSampleRef.current
+      let smoothedBytesPerSecond = previousSample?.smoothedBytesPerSecond ?? null
+
+      if (previousSample) {
+        const elapsedSeconds = (sampledAt - previousSample.sampledAt) / 1000
+        const transferredSinceLastSample = Math.max(
+          0,
+          transferredBytes - previousSample.transferredBytes
+        )
+
+        if (elapsedSeconds > 0) {
+          const currentBytesPerSecond =
+            transferredSinceLastSample / elapsedSeconds
+          smoothedBytesPerSecond =
+            smoothedBytesPerSecond === null
+              ? currentBytesPerSecond || null
+              : smoothedBytesPerSecond * 0.75 + currentBytesPerSecond * 0.25
+        }
+      }
+
+      const remainingBytes = Math.max(0, size - transferredBytes)
+      const secondsLeft =
+        smoothedBytesPerSecond && smoothedBytesPerSecond > 0
+          ? Math.ceil(remainingBytes / smoothedBytesPerSecond)
+          : null
+
+      speedSampleRef.current = {
+        transferredBytes,
+        sampledAt,
+        smoothedBytesPerSecond,
+      }
+      setDisplayedStats({
+        transferredBytes,
+        progressPercent: size
+          ? Math.round((transferredBytes / size) * 100)
+          : 0,
+        timeLeft: formatTimeLeft(secondsLeft),
+      })
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [active, item.id, size])
+
+  const transferredBytes = active
+    ? displayedStats.transferredBytes
+    : liveTransferredBytes
+  const progressPercent = active
+    ? displayedStats.progressPercent
+    : Math.round(liveProgress)
+  const progress = active ? progressPercent : liveProgress
+  const sizeLabel =
+    status === "complete"
+      ? formatBytes(size)
+      : `${formatBytes(transferredBytes)} / ${formatBytes(size)}`
+  const timeLeft = active ? displayedStats.timeLeft : null
 
   return (
     <article className="group flex items-center gap-3 rounded-xl border border-[#E4E1DA] bg-white px-3 py-3.5 transition-colors hover:border-[#D8D4C9] sm:gap-4 sm:px-4">
@@ -111,30 +209,48 @@ function ManifestTransferRow({ item }: { item: ChatItem }) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-3">
-          <p className="truncate text-sm font-medium text-[#14171F]">
-            {item.name ?? "Shared file"}
-          </p>
-          <span className="ptx-mono hidden shrink-0 text-[11px] text-[#8A8776] sm:inline">
-            {formatAgo(item.ts)}
+          <div className="flex min-w-0 items-center gap-5">
+            <p className="min-w-0 truncate text-sm font-medium text-[#14171F]">
+              {item.name ?? "Shared file"}
+            </p>
+            <Pill tone={meta.tone}>
+              {active && <Loader2 className="size-3 animate-spin" />}
+              {status === "complete" && <Check className="size-3" />}
+              <span className="hidden sm:inline">{statusLabel}</span>
+            </Pill>
+          </div>
+
+
+          <span className="ptx-mono shrink-0 text-[11px] text-[#8A8776] flex">
+            {status === "complete" ? formatAgo(item.ts) : timeLeft}
           </span>
         </div>
 
-        <div className="mt-2 flex items-center gap-3">
-          <div className="min-w-16 flex-1">
-            <TrackDot progress={progress} tone={meta.tone} />
+        <div className="mt-2 items-center gap-3 flex flex-row justify-between">
+          <div
+            className={`ptx-mono shrink-0 text-[11px] text-[#8A8776] ${active ? "" : "md:ml-auto md:w-[108px] md:text-right"}`}
+          >
+            {sizeLabel}
           </div>
-          <span className="ptx-mono hidden w-[108px] shrink-0 text-right text-[11px] text-[#8A8776] md:inline">
-            {formatBytes(transferredBytes)} / {formatBytes(size)}
-          </span>
+          {timeLeft && (
+            <div className="flex">
+              <span className="ptx-mono shrink-0 text-[11px] text-[#8A8776] md:flex">
+                {progressPercent}%
+              </span>
+            </div>
+
+          )}
+          {SHOW_TRANSFER_PROGRESS && (
+            <div className="min-w-16 flex-1">
+              <TrackDot progress={progress} tone={meta.tone} />
+            </div>
+          )}
+
         </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        <Pill tone={meta.tone}>
-          {active && <Loader2 className="size-3 animate-spin" />}
-          {status === "complete" && <Check className="size-3" />}
-          <span className="hidden sm:inline">{statusLabel}</span>
-        </Pill>
+
 
         {status === "complete" && item.url && (
           <a
@@ -234,11 +350,10 @@ function ManifestPanel({
                       setSort(key)
                       setSortOpen(false)
                     }}
-                    className={`flex w-full items-center justify-between px-3.5 py-2 text-left text-sm hover:bg-[#F5F4F0] ${
-                      sort === key
-                        ? "font-medium text-[#14171F]"
-                        : "text-[#4B5160]"
-                    }`}
+                    className={`flex w-full items-center justify-between px-3.5 py-2 text-left text-sm hover:bg-[#F5F4F0] ${sort === key
+                      ? "font-medium text-[#14171F]"
+                      : "text-[#4B5160]"
+                      }`}
                   >
                     {label}
                     {sort === key && <Check className="size-3.5" />}
