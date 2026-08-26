@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { MessageCircle, Send } from "lucide-react"
+import { Link } from "react-router"
+import { MessageCircle, Send, Video } from "lucide-react"
 
 import { formatRelativeTime, type ChatItem } from "@/components/rtc/types"
 
@@ -22,11 +23,17 @@ function MessageComponent({
   inputId = "peer-message-draft",
   className = "",
 }: MessageComponentProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const messageListRef = useRef<HTMLDivElement>(null)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+    const messageList = messageListRef.current
+    if (!messageList) return
+
+    messageList.scrollTo({
+      top: messageList.scrollHeight,
+      behavior: "smooth",
+    })
   }, [messages.length])
 
   useEffect(() => {
@@ -41,25 +48,33 @@ function MessageComponent({
 
   return (
     <section
-      className={`flex h-[440px] w-full flex-col overflow-hidden rounded-2xl border border-[#E4E1DA] bg-white ${className}`}
+      className={`flex md:h-[440px] h-[70vh] w-full flex-col overflow-hidden rounded-2xl border border-[#E4E1DA] bg-white ${className}`}
       aria-label="Peer messages"
     >
       <header className="flex items-center gap-3 border-b border-[#E4E1DA] px-4 py-3.5">
         <span
-          className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-[#14171F]"
+          className="flex size-9 shrink-0 items-center justify-center rounded-xl "
           aria-hidden="true"
         >
           <MessageCircle className="size-4 text-[#F2A33C]" strokeWidth={1.9} />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="ptx-display text-sm font-semibold text-[#14171F]">
-            Messages
-          </h2>
+          <div className="flex ">
+            <h2 className="ptx-display text-sm font-semibold text-[#14171F]">
+              Messages
+            </h2>
+            <div className="w-full flex justify-end mr-10">
+              <button className="hover:scale-105">
+                <Link to="/call">
+                  <Video />
+                </Link>
+              </button>
+            </div>
+          </div>
           <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[#8A8776]">
             <span
-              className={`size-1.5 rounded-full ${
-                connected ? "bg-[#16947F]" : "bg-[#AAA697]"
-              }`}
+              className={`size-1.5 rounded-full ${connected ? "bg-[#16947F]" : "bg-[#AAA697]"
+                }`}
             />
             {connected ? "Direct channel open" : "Waiting for peer"}
           </p>
@@ -67,23 +82,22 @@ function MessageComponent({
       </header>
 
       <div
-        className="min-h-0 flex-1 overflow-y-auto bg-[#FBFBFA] px-3.5 py-4"
+        ref={messageListRef}
+        className="min-h-0 flex-1 overscroll-contain overflow-y-auto bg-[#FBFBFA] px-3.5 py-4"
         aria-live="polite"
       >
         {messages.length > 0 ? (
           messages.map((message) => (
             <article
               key={message.id}
-              className={`mb-3 flex flex-col ${
-                message.mine ? "items-end" : "items-start"
-              }`}
+              className={`mb-3 flex flex-col ${message.mine ? "items-end" : "items-start"
+                }`}
             >
               <p
-                className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${
-                  message.mine
-                    ? "rounded-br-md bg-[#14171F] text-white"
-                    : "rounded-bl-md border border-[#E4E1DA] bg-white text-[#14171F]"
-                }`}
+                className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${message.mine
+                  ? "rounded-br-md bg-[#14171F] text-white"
+                  : "rounded-bl-md border border-[#E4E1DA] bg-white text-[#14171F]"
+                  }`}
               >
                 {message.text}
               </p>
@@ -106,7 +120,6 @@ function MessageComponent({
             </p>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       <form

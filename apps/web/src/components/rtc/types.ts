@@ -12,6 +12,8 @@ export type ChatItem = {
   transferStatus?: "sending" | "receiving" | "complete" | "failed"
 }
 
+export type SpeedDirection = "download" | "upload"
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return ""
   if (bytes < 1024) return `${bytes} B`
