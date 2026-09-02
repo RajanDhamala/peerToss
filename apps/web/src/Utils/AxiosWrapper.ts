@@ -2,6 +2,8 @@
 
 import axios, { type AxiosInstance, type AxiosResponse } from "axios";
 
+import { BACKEND_BASE_URL } from "@/Config/Environment";
+
 // The interceptor intentionally unwraps the response payload for API callers.
 interface ApiResponse<T = any> { // eslint-disable-line @typescript-eslint/no-explicit-any
   success: boolean;
@@ -11,7 +13,7 @@ interface ApiResponse<T = any> { // eslint-disable-line @typescript-eslint/no-ex
 }
 
 const api: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "/api",
+  baseURL: BACKEND_BASE_URL,
   timeout: 10000,
   headers: { "Content-Type": "application/json" },
   withCredentials: true, // send cookies automatically

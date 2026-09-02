@@ -3,9 +3,10 @@ package controller
 import (
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"math/big"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	utils "http-server/internal/utils"
@@ -20,19 +21,50 @@ const (
 	writeWait  = 10 * time.Second
 )
 
+var Domain = os.Getenv("DOMAIN")
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		if origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" {
-			return true
-		}
-		return false
+
+		return origin == Domain ||
+			origin == "http://localhost:5173" ||
+			origin == "http://127.0.0.1:5173"
 	},
 }
 
 type Client struct {
 	SessionId string
 	Conn      *websocket.Conn
+	Send      chan any
+	Done      chan struct{}
+	CloseOnce sync.Once
+}
+
+func (client *Client) Close() {
+	client.CloseOnce.Do(func() {
+		close(client.Done)
+		client.Conn.Close()
+	})
+}
+
+func sendClientMessage(client *Client, message any) bool {
+	if client == nil {
+		return false
+	}
+
+	select {
+	case <-client.Done:
+		return false
+	default:
+	}
+
+	select {
+	case client.Send <- message:
+		return true
+	case <-client.Done:
+		return false
+	}
 }
 
 type Session struct {
@@ -41,12 +73,13 @@ type Session struct {
 	User1     *Client
 	User2     *Client
 	State     string
-	ExpiresAt time.Time
 }
 
 var (
 	ActiveClients  = make(map[string]*Client)
+	ClientMu       sync.RWMutex
 	ActiveSessions = make(map[string]*Session)
+	SessionsMu     sync.RWMutex
 )
 
 type WsMessage struct {
@@ -67,22 +100,54 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if seesionInfo.UserId != user.ID {
-		fmt.Println("unauthorized access attempt")
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "attempt to unauthorize access found",
 		})
+		return
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Println("failed to upgrade connection:", err)
 		return
 	}
 	NewUUid := uuid.NewString()
 	client := Client{
 		Conn:      conn,
 		SessionId: seesionInfo.ID,
+		Send:      make(chan any, 5),
+		Done:      make(chan struct{}),
 	}
+
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+
+		for {
+			select {
+
+			case msg := <-client.Send:
+				conn.SetWriteDeadline(time.Now().Add(writeWait))
+				err := client.Conn.WriteJSON(msg)
+				if err != nil {
+					client.Close()
+					return
+				}
+
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(writeWait))
+
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					client.Close()
+					return
+				}
+			case <-client.Done:
+				return
+			}
+		}
+	}()
+
+	ClientMu.Lock()
 	ActiveClients[user.ID] = &client
+	ClientMu.Unlock()
 	conn.SetReadLimit(24 * 1024) // 24 kb max palyload size
 
 	// Initial read deadline.
@@ -90,24 +155,31 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Every pong proves the client is still alive.
 	conn.SetPongHandler(func(string) error {
-		fmt.Println("PONG")
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	msg := WsMessage{}
 
 	// cleanup
 	defer func() {
-		conn.Close()
-		_, ok := ActiveClients[user.ID]
-		if ok != true {
-			fmt.Println("session not found to flush")
+		client.Close()
+
+		ClientMu.Lock()
+		if ActiveClients[user.ID] == &client {
+			delete(ActiveClients, user.ID)
 		}
-		fmt.Println("socket instance flushed")
-		delete(ActiveClients, user.ID)
+		ClientMu.Unlock()
+
+		SessionsMu.Lock()
+		activeSession := ActiveSessions[seesionInfo.ID]
+		if activeSession != nil &&
+			(activeSession.User1 == &client || activeSession.User2 == &client) {
+			delete(ActiveSessions, seesionInfo.ID)
+		}
+		SessionsMu.Unlock()
 	}()
 
 	conn.WriteMessage(websocket.TextMessage, []byte("connected"))
-	conn.WriteJSON(map[string]string{
+	sendClientMessage(&client, map[string]string{
 		"SocketId": NewUUid,
 	})
 
@@ -115,17 +187,20 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		data := Session{
 			ID:        seesionInfo.ID,
 			CreatedBy: user.ID,
-			User1:     ActiveClients[user.ID],
+			User1:     &client,
 			State:     "waiting",
-			ExpiresAt: time.Now().Add(60 * time.Second),
 		}
-		fmt.Println("creator has joined ws")
+		SessionsMu.Lock()
 		ActiveSessions[seesionInfo.ID] = &data
+		SessionsMu.Unlock()
 	} else {
-		fmt.Println("particpant has joined")
+		SessionsMu.Lock()
 		data, ok := ActiveSessions[seesionInfo.ID]
+		if ok {
+			data.User2 = &client
+		}
+		SessionsMu.Unlock()
 		if !ok {
-			fmt.Println("session not found")
 
 			conn.WriteControl(
 				websocket.CloseMessage,
@@ -135,13 +210,12 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				),
 				time.Now().Add(writeWait),
 			)
-
 			return
 		}
 
-		data.User2 = &client
-
+		ClientMu.RLock()
 		owner, ok := ActiveClients[data.CreatedBy]
+		ClientMu.RUnlock()
 		if !ok {
 			conn.WriteControl(
 				websocket.CloseMessage,
@@ -154,36 +228,14 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
-		fmt.Println("sending the ws repsonse")
 
-		if err := owner.Conn.WriteJSON(WsMessage{
+		if !sendClientMessage(owner, WsMessage{
 			Event: "user-joined",
-		}); err != nil {
-			fmt.Println("failed to notify user1:", err)
+		}) {
+			return
 		}
+
 	}
-	done := make(chan struct{})
-
-	go func() {
-		ticker := time.NewTicker(pingPeriod)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(writeWait))
-				fmt.Println("PING")
-
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	defer close(done)
 
 	type WebrtcOffer struct {
 		Sdp  string `json:"sdp"`
@@ -193,85 +245,121 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		err := conn.ReadJSON(&msg)
 		if err != nil {
-			fmt.Println("client disconnected:", err)
 			break
 		}
-		fmt.Println("event:", msg.Event)
 
 		switch msg.Event {
-		case "test":
-			fmt.Println("got to the test event")
-		case "demo":
-			fmt.Println("got to the demo event")
 		case "create-offer":
-			fmt.Println("got the ofer event btw")
 
+			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
+			if !ok {
+				SessionsMu.RUnlock()
+				return
+			}
+
+			var peer *Client
+			if resthai.CreatedBy != user.ID {
+				peer = resthai.User1
+			} else {
+				peer = resthai.User2
+			}
+			SessionsMu.RUnlock()
+
 			payload := map[string]any{
 				"event": "recieve-offer",
 				"data":  msg.Data,
 			}
-			fmt.Println("creadby:", resthai.CreatedBy, "init:", user.ID)
 
-			if resthai.CreatedBy != user.ID {
-				resthai.User1.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("error aayoo haai")
-					return
-				}
-			} else {
-				resthai.User2.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("error aayoo haai")
-					return
-				}
+			if !sendClientMessage(peer, payload) {
+				return
 			}
 
 		case "create-answer":
-			fmt.Println("got the anser event btw")
 
+			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
+			if !ok {
+				SessionsMu.RUnlock()
+				// meaning season not found so we will return teh err
+				// simple return invokes the orginal defer fxn and flushes all stuff
+				return
+			}
+
+			var peer *Client
+			if user.ID != resthai.CreatedBy {
+				peer = resthai.User1
+			} else {
+				peer = resthai.User2
+			}
+			SessionsMu.RUnlock()
+
 			payload := map[string]any{
 				"event": "recieve-answer",
 				"data":  msg.Data,
 			}
 
-			if user.ID != resthai.CreatedBy {
-				resthai.User1.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("error aayoo haai")
-					return
-				}
-			} else {
-				resthai.User2.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("error aayoo haai")
-					return
-				}
+			if !sendClientMessage(peer, payload) {
+				return
 			}
 
 		case "send-ice-candiate":
-			fmt.Println("got the ice-candiate event btw")
 
+			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
+			if !ok {
+				SessionsMu.RUnlock()
+				// meaing session not found so we will drop ws conn as we cannot establish handshake without it
+				// simple return invokes the orginal defer fxn and flushes all stuff
+				return
+			}
+
+			var peer *Client
+			if user.ID != resthai.CreatedBy {
+				peer = resthai.User1
+			} else {
+				peer = resthai.User2
+			}
+			SessionsMu.RUnlock()
+
 			payload := map[string]any{
 				"event": "ack-ice-candidate",
 				"data":  msg.Data,
 			}
 
-			if user.ID != resthai.CreatedBy {
-				resthai.User1.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("err while sending ice")
-					return
-				}
-			} else {
-				resthai.User2.Conn.WriteJSON(payload)
-				if !ok {
-					fmt.Println("seems user unavilable")
-					return
-				}
+			if !sendClientMessage(peer, payload) {
+				return
 			}
+
+		case "rtc-error":
+			// any error during the rtc handshake
+
+			SessionsMu.RLock()
+			resthai, ok := ActiveSessions[seesionInfo.ID]
+			if !ok {
+				SessionsMu.RUnlock()
+				// meaing session not found so we will drop ws conn as we cannot establish handshake without it
+				// simple return invokes the orginal defer fxn and flushes all stuff
+				return
+			}
+
+			var peer *Client
+			if user.ID != resthai.CreatedBy {
+				peer = resthai.User1
+			} else {
+				peer = resthai.User2
+			}
+			SessionsMu.RUnlock()
+
+			payload := map[string]any{
+				"event": "error",
+				"data":  msg.Data,
+			}
+
+			if !sendClientMessage(peer, payload) {
+				return
+			}
+
 		default:
 			return
 		}
@@ -304,12 +392,9 @@ func (c *Controller) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	fmt.Println("ready to start the ws session btw")
-
 	// assume currenly its user socket/id ok hardcoded for now
 	newCode, err := generateCode(6)
 	if err != nil {
-		fmt.Println("error while genrating code")
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "failed to create session",
 		})
@@ -321,7 +406,6 @@ func (c *Controller) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	newToken, err := utils.CreateSessionToken(newCode, user.ID, "creator")
 	if err != nil {
-		fmt.Println("error while jwt creation")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "internal  server error",
@@ -354,15 +438,11 @@ func (c *Controller) JoinSession(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := r.PathValue("id")
 
-	session, ok := ActiveSessions[sessionID]
+	SessionsMu.RLock()
+	_, ok = ActiveSessions[sessionID]
+	SessionsMu.RUnlock()
 	if !ok {
 		http.Error(w, "invalid or expired session", http.StatusNotFound)
-		return
-	}
-
-	if time.Now().After(session.ExpiresAt) {
-		delete(ActiveSessions, sessionID)
-		http.Error(w, "session expired", http.StatusGone)
 		return
 	}
 

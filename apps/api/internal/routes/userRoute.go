@@ -15,7 +15,5 @@ func UserRouter(app *http.ServeMux, ctrl *controller.Controller) {
 
 	app.HandleFunc("GET /JoinSession/{id}", middleware.Auth(ctrl.JoinSession))
 
-	app.HandleFunc("GET /init", ctrl.InitUser)
-
 	app.HandleFunc("GET /me", middleware.Auth(ctrl.GetMe))
 }

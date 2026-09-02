@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import MessageComponent from "@/components/rtc/MessageComponet"
 
 import { toast } from "react-hot-toast"
@@ -6,6 +6,7 @@ import { Link } from "react-router"
 import {
   ArrowLeft,
   ArrowUpRight,
+  FolderUp,
   Gauge,
   Loader2,
   MessageCircle,
@@ -16,6 +17,7 @@ import {
 import useUserStore from "@/UserStore"
 import { ManifestPanel } from "@/components/rtc/ManifestPanel"
 import { SpeedMeter } from "@/components/rtc/SpeedMeter"
+import { useFolderUploadPreference } from "@/components/rtc/FolderUploadPreferenceDialog"
 import { formatBytes } from "@/components/rtc/types"
 import {
   Dialog,
@@ -28,6 +30,11 @@ import {
   rtcSession,
 } from "@/global/rtc/RtcSessionController"
 import useRtcStore from "@/global/rtc/rtcStore"
+import {
+  getDroppedFileSystemEntry,
+  readDroppedDirectory,
+  readDroppedTransfer,
+} from "@/Utils/folderArchive"
 
 function RtcPage() {
   const ws = useUserStore((state) => state.ws)
@@ -54,6 +61,7 @@ function RtcPage() {
   const speedTestWaiting = useRtcStore(
     (state) => state.speedTestWaiting
   )
+  const callStatus = useRtcStore((state) => state.callStatus)
 
   const [draft, setDraft] = useState("")
   const [draggingFile, setDraggingFile] = useState(false)
@@ -61,6 +69,14 @@ function RtcPage() {
   const [mobileChatOpen, setMobileChatOpen] = useState(false)
   const [isMouseOver, setIsMouseOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (folderInputRef.current) folderInputRef.current.webkitdirectory = true
+  }, [])
+
+  const { requestFolderUpload, folderUploadPreferenceDialog } =
+    useFolderUploadPreference()
 
   const channelOpen = chatReady
   const transferChannelOpen = fileReady
@@ -95,8 +111,63 @@ function RtcPage() {
     if (rtcSession.sendMessage(draft)) setDraft("")
   }
 
+  const sendDroppedTransfer = async (dataTransfer: DataTransfer) => {
+    try {
+      const transfer = await readDroppedTransfer(dataTransfer)
+      if (transfer.kind === "folder") {
+        await rtcSession.sendFolder(transfer.files, transfer.ignoredCount)
+        return
+      }
+      await rtcSession.sendFile(transfer.file)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not read the dropped item"
+      )
+    }
+  }
+
+  const sendDroppedDirectory = async (
+    entry: FileSystemDirectoryEntry,
+    ignoreGenerated: boolean
+  ) => {
+    try {
+      const folder = await readDroppedDirectory(entry, ignoreGenerated)
+      await rtcSession.sendFolder(
+        folder.files,
+        folder.ignoredCount,
+        ignoreGenerated
+      )
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not read the dropped folder"
+      )
+    }
+  }
+
+  const handleDroppedItem = (dataTransfer: DataTransfer) => {
+    try {
+      const entry = getDroppedFileSystemEntry(dataTransfer)
+      if (entry?.isDirectory) {
+        requestFolderUpload((ignoreGenerated) => {
+          void sendDroppedDirectory(
+            entry as FileSystemDirectoryEntry,
+            ignoreGenerated
+          )
+        })
+        return
+      }
+
+      void sendDroppedTransfer(dataTransfer)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not read the dropped item"
+      )
+    }
+  }
+
   return (
     <main className="min-h-dvh bg-[#F5F4F0] text-[#14171F]">
+      {folderUploadPreferenceDialog}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
         .ptx-display { font-family: 'Space Grotesk', ui-sans-serif, system-ui; }
@@ -213,6 +284,22 @@ function RtcPage() {
                       event.target.value = ""
                     }}
                   />
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    disabled={!canChooseFile}
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? [])
+                      if (files.length) {
+                        requestFolderUpload((ignoreGenerated) => {
+                          void rtcSession.sendFolder(files, 0, ignoreGenerated)
+                        })
+                      }
+                      event.target.value = ""
+                    }}
+                  />
 
                   <div
                     role="button"
@@ -243,14 +330,11 @@ function RtcPage() {
                       setDraggingFile(false)
 
                       if (!canChooseFile) {
-                        toast.error("Connect to a peer before selecting a file")
+                        toast.error("Connect to a peer before selecting a file or folder")
                         return
                       }
 
-                      const files = Array.from(event.dataTransfer.files)
-                      if (!files.length) return
-                      if (files.length > 1) toast("Send one file at a time")
-                      void rtcSession.sendFile(files[0])
+                      handleDroppedItem(event.dataTransfer)
                     }}
                     className={`relative flex min-h-[320px] flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F5F4F0] ${!canChooseFile
                       ? "cursor-not-allowed border-[#DEDAD1] bg-white/60"
@@ -296,27 +380,43 @@ function RtcPage() {
                         : draggingFile
                           ? "Release to add it"
                           : canChooseFile
-                            ? "Drop a file to toss it over"
+                            ? "Drop a file or folder"
                             : "The launch pad is waiting"}
                     </p>
                     <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[#8A8776]">
                       {canChooseFile
-                        ? "One file at a time — it waits for confirmation before leaving this device."
+                        ? "Send one file, or package an entire folder into a ZIP before it leaves this device."
                         : "Open the direct file channel, then choose or drop a file here."}
                     </p>
 
-                    <button
-                      type="button"
-                      disabled={!canChooseFile}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        if (canChooseFile) fileInputRef.current?.click()
-                      }}
-                      className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
-                    >
-                      Browse files
-                      <ArrowUpRight className="size-3.5" />
-                    </button>
+                    <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!canChooseFile}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (canChooseFile) fileInputRef.current?.click()
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
+                      >
+                        Browse files
+                        <ArrowUpRight className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canChooseFile}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (canChooseFile) {
+                            folderInputRef.current?.click()
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-[#D8D4C9] bg-white px-4 py-2.5 text-sm font-medium text-[#14171F] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#ECE9E1] disabled:text-[#8A8776]"
+                      >
+                        Browse folder
+                        <FolderUp className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {/* signal section */}
@@ -355,10 +455,14 @@ function RtcPage() {
               messages={textMessages}
               draft={draft}
               connected={channelOpen}
+              callStatus={callStatus}
               onDraftChange={setDraft}
               inputId="peer-message-draft-desktop"
               onSend={() => {
                 void sendMessage()
+              }}
+              onStartVideoCall={() => {
+                rtcSession.requestVideoCall()
               }}
               className="hidden md:flex xl:sticky xl:top-24"
             />
@@ -407,10 +511,14 @@ function RtcPage() {
               messages={textMessages}
               draft={draft}
               connected={channelOpen}
+              callStatus={callStatus}
               onDraftChange={setDraft}
               inputId="peer-message-draft-mobile"
               onSend={() => {
                 void sendMessage()
+              }}
+              onStartVideoCall={() => {
+                rtcSession.requestVideoCall()
               }}
               className="max-h-[calc(100dvh-2rem)] border-0"
             />

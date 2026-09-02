@@ -31,16 +31,21 @@ type sessionClaims struct {
 	jwt.RegisteredClaims
 }
 
-func CreateUserToken(id string) (string, error) {
+func CreateUserToken(id string) (string, tokenClaims, error) {
 	claims := tokenClaims{
 		ID: id,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * 3 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(3 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).
-		SignedString([]byte(os.Getenv("JWT_TOKEN")))
+
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(os.Getenv("JWT_TOKEN")))
+	if err != nil {
+		return "", tokenClaims{}, err
+	}
+
+	return token, claims, nil
 }
 
 func CreateSessionToken(id string, userId string, role string) (string, error) {

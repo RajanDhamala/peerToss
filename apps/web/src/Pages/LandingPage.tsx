@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router"
-import { QRCodeSVG } from "qrcode.react"
 import toast from "react-hot-toast"
 import {
   ArrowRight,
@@ -26,7 +25,10 @@ import {
 import { useTheme } from "@/hooks/useTheme"
 import useUserStore, { type AppWebSocket } from "@/UserStore"
 import { rtcSession } from "@/global/rtc/RtcSessionController"
-import QrScanner from "@/components/QrScanner"
+import {
+  backendEndpoint,
+  WEBSOCKET_URL,
+} from "@/Config/Environment"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -37,14 +39,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-
-const API_BASE = import.meta.env.VITE_API_URL || "/api"
-const WS_URL =
-  import.meta.env.VITE_WS_URL ||
-  (window.location.protocol === "https:" ? "wss:" : "ws:") +
-  "//" +
-  window.location.host +
-  "/api/ws"
 
 type CreatedSession = {
   session_id: string
@@ -59,7 +53,34 @@ type WsMessage = {
 type SessionRole = "creator" | "participant"
 type ShowcaseCard = "file" | "connection" | "link"
 
+type BootstrapSocket = {
+  socket: AppWebSocket
+  cleanup: () => void
+}
+
 const SHOWCASE_ORDER: ShowcaseCard[] = ["connection", "file", "link"]
+
+const LazyQrScanner = lazy(() => import("@/components/QrScanner"))
+const LazyQrCode = lazy(() =>
+  import("qrcode.react").then(({ QRCodeSVG }) => ({ default: QRCodeSVG }))
+)
+
+function getSessionTokenFromQr(value: string) {
+  const scannedValue = value.trim()
+
+  try {
+    const url = new URL(scannedValue)
+    const queryToken = url.searchParams.get("token")?.trim()
+    if (queryToken) return queryToken
+
+    const pathToken = url.pathname.match(/\/join\/([^/]+)\/?$/)?.[1]
+    if (pathToken) return decodeURIComponent(pathToken).trim()
+  } catch {
+    // Existing QR codes contain only the raw session code.
+  }
+
+  return scannedValue
+}
 
 const FAQ_ITEMS = [
   {
@@ -147,7 +168,6 @@ const FLOATING_ASSETS = FLOATING_ASSET_ZONES.map((zone, index) => ({
 const LandingPage = () => {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
-  const ws = useUserStore((state) => state.ws)
   const setWs = useUserStore((state) => state.setWs)
 
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -166,8 +186,13 @@ const LandingPage = () => {
   const [floatingAssets, setFloatingAssets] = useState(FLOATING_ASSETS)
   const [demoUploadProgress, setDemoUploadProgress] = useState(8)
   const mobileShowcaseRef = useRef<HTMLDivElement>(null)
+  const bootstrapSocketRef = useRef<BootstrapSocket | null>(null)
+  const sessionAttemptRef = useRef(0)
 
   const visibleShowcase = hoveredShowcase ?? selectedShowcase
+  const sessionJoinUrl = session
+    ? `${window.location.origin}/join?token=${encodeURIComponent(session.session_id)}`
+    : ""
 
   const respawnFloatingAsset = useCallback((id: string) => {
     setFloatingAssets((currentAssets) =>
@@ -261,9 +286,36 @@ const LandingPage = () => {
     setSelectedShowcase(card)
   }, [])
 
+  const clearPreviousSession = useCallback(() => {
+    const bootstrapSocket = bootstrapSocketRef.current
+    const storedSocket = useUserStore.getState().ws
+
+    bootstrapSocket?.cleanup()
+    rtcSession.endSession()
+
+    const sockets = new Set<AppWebSocket>()
+    if (bootstrapSocket) sockets.add(bootstrapSocket.socket)
+    if (storedSocket) sockets.add(storedSocket)
+
+    for (const socket of sockets) {
+      if (socket.readyState < WebSocket.CLOSING) socket.close()
+    }
+
+    setWs(null)
+    setSession(null)
+    setCloseSessionConfirmOpen(false)
+    setCreating(false)
+    setJoining(false)
+
+    sessionAttemptRef.current += 1
+    return sessionAttemptRef.current
+  }, [setWs])
+
   const connectSessionSocket = useCallback(
-    (role: SessionRole) => {
-      const socket = new WebSocket(WS_URL) as AppWebSocket
+    (role: SessionRole, attemptId: number) => {
+      if (sessionAttemptRef.current !== attemptId) return
+
+      const socket = new WebSocket(WEBSOCKET_URL) as AppWebSocket
       let identified = false
       let failureShown = false
 
@@ -271,9 +323,17 @@ const LandingPage = () => {
         socket.removeEventListener("message", handleBootstrapMessage)
         socket.removeEventListener("error", failBeforeReady)
         socket.removeEventListener("close", failBeforeReady)
+        if (bootstrapSocketRef.current?.socket === socket) {
+          bootstrapSocketRef.current = null
+        }
       }
 
       function failBeforeReady() {
+        if (sessionAttemptRef.current !== attemptId) {
+          cleanupBootstrapListeners()
+          return
+        }
+
         if (identified || failureShown) {
           cleanupBootstrapListeners()
           return
@@ -281,12 +341,18 @@ const LandingPage = () => {
         failureShown = true
         cleanupBootstrapListeners()
         setJoining(false)
-        setWs(null)
+        if (useUserStore.getState().ws === socket) setWs(null)
         if (role === "creator") setSession(null)
         toast.error("Could not establish the session connection")
       }
 
       function handleBootstrapMessage(event: MessageEvent) {
+        if (sessionAttemptRef.current !== attemptId) {
+          cleanupBootstrapListeners()
+          if (socket.readyState < WebSocket.CLOSING) socket.close()
+          return
+        }
+
         if (typeof event.data !== "string") return
 
         let message: WsMessage
@@ -321,6 +387,10 @@ const LandingPage = () => {
       socket.addEventListener("message", handleBootstrapMessage)
       socket.addEventListener("error", failBeforeReady)
       socket.addEventListener("close", failBeforeReady)
+      bootstrapSocketRef.current = {
+        socket,
+        cleanup: cleanupBootstrapListeners,
+      }
       setWs(socket)
 
       return socket
@@ -329,31 +399,30 @@ const LandingPage = () => {
   )
 
   const handleCreateSession = async () => {
+    const attemptId = clearPreviousSession()
     setCreating(true)
     try {
-      const response = await fetch(API_BASE + "/createSession")
+      const response = await fetch(backendEndpoint("createSession"))
       const body = await response.json().catch(() => ({}))
+      if (sessionAttemptRef.current !== attemptId) return
       if (!response.ok || body.error || typeof body.session_id !== "string") {
         throw new Error(body.error || "Failed to create session")
       }
 
       setSession({ session_id: body.session_id })
-      connectSessionSocket("creator")
+      connectSessionSocket("creator", attemptId)
       setConfirmOpen(false)
     } catch (error) {
+      if (sessionAttemptRef.current !== attemptId) return
       toast.error("Could not create a session. Is the server running?")
       console.error(error)
     } finally {
-      setCreating(false)
+      if (sessionAttemptRef.current === attemptId) setCreating(false)
     }
   }
 
   const handleCloseSession = () => {
-    rtcSession.endSession({ closeSocket: false })
-    ws?.close()
-    setWs(null)
-    setSession(null)
-    setCloseSessionConfirmOpen(false)
+    clearPreviousSession()
   }
 
   const handleJoinSession = useCallback(
@@ -364,30 +433,33 @@ const LandingPage = () => {
         return
       }
 
+      const attemptId = clearPreviousSession()
       setJoining(true)
       try {
         const response = await fetch(
-          API_BASE + "/JoinSession/" + encodeURIComponent(code)
+          backendEndpoint("JoinSession/" + encodeURIComponent(code))
         )
         const body = await response.json().catch(() => ({}))
+        if (sessionAttemptRef.current !== attemptId) return
         if (!response.ok || body.error) {
           throw new Error(body.error || "Invalid or expired session")
         }
 
-        connectSessionSocket("participant")
+        connectSessionSocket("participant", attemptId)
       } catch (error) {
+        if (sessionAttemptRef.current !== attemptId) return
         setJoining(false)
         toast.error(
           error instanceof Error ? error.message : "Failed to join session"
         )
       }
     },
-    [connectSessionSocket, joinCode]
+    [clearPreviousSession, connectSessionSocket, joinCode]
   )
 
   const handleQrDetect = useCallback(
     (value: string) => {
-      const code = value.trim()
+      const code = getSessionTokenFromQr(value)
       setJoinCode(code)
       void handleJoinSession(code)
     },
@@ -716,7 +788,9 @@ const LandingPage = () => {
             <p className="mt-7 text-xs font-medium uppercase tracking-[0.14em] text-black/40 dark:text-white/55">
               Clipboard link
             </p>
-            <p className="mt-2 truncate text-sm font-semibold">localhost:5173/project</p>
+            <p className="mt-2 truncate text-sm font-semibold">
+              {window.location.host}/project
+            </p>
             <p className="mt-2 text-xs text-black/45 dark:text-white/60">
               Just now · from your laptop
             </p>
@@ -858,7 +932,18 @@ const LandingPage = () => {
 
           <div className="flex flex-col items-center gap-4 py-1">
             <div className="rounded-2xl border bg-white p-4 shadow-sm">
-              <QRCodeSVG value={session?.session_id ?? ""} size={184} />
+              <Suspense
+                fallback={
+                  <div
+                    className="flex size-[184px] items-center justify-center"
+                    aria-label="Loading QR code"
+                  >
+                    <Loader2 className="size-5 animate-spin text-slate-400" />
+                  </div>
+                }
+              >
+                <LazyQrCode value={sessionJoinUrl} size={184} />
+              </Suspense>
             </div>
 
             <button
@@ -942,7 +1027,15 @@ const LandingPage = () => {
               autoFocus
             />
           ) : (
-            <QrScanner onDetect={handleQrDetect} />
+            <Suspense
+              fallback={
+                <div className="flex aspect-square w-full items-center justify-center rounded-xl border bg-muted/30">
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                </div>
+              }
+            >
+              <LazyQrScanner onDetect={handleQrDetect} />
+            </Suspense>
           )}
 
           <DialogFooter className="sm:justify-between">

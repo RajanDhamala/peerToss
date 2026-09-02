@@ -3,13 +3,20 @@ import {
   Check,
   ChevronDown,
   Download,
+  FolderArchive,
+  FolderOpen,
   Loader2,
   Search,
   Upload,
 } from "lucide-react"
+import { toast } from "react-hot-toast"
 
 import { FileTypeIcon } from "@/components/rtc/FileTypeIcon"
 import { formatBytes, type ChatItem } from "@/components/rtc/types"
+import {
+  canExtractFolderArchive,
+  extractFolderArchive,
+} from "@/Utils/folderArchive"
 
 const SORT_LABELS = {
   recent: "Most recent",
@@ -101,6 +108,50 @@ function TrackDot({ progress, tone }: { progress: number; tone: PillTone }) {
         }}
       />
     </div>
+  )
+}
+
+function ExtractFolderButton({ item }: { item: ChatItem }) {
+  const [extracting, setExtracting] = useState(false)
+
+  if (item.mine || !item.folderArchive || !item.url) return null
+
+  return (
+    <button
+      type="button"
+      disabled={extracting}
+      onClick={() => {
+        if (!item.url) return
+        if (!canExtractFolderArchive()) {
+          toast.error(
+            "This browser cannot extract folders directly. Download the ZIP instead."
+          )
+          return
+        }
+
+        setExtracting(true)
+        void extractFolderArchive(item.url)
+          .then((count) => toast.success(`Extracted ${count} files`))
+          .catch((error: unknown) => {
+            if (error instanceof DOMException && error.name === "AbortError") return
+            toast.error(
+              error instanceof Error
+                ? error.message
+                : "Could not extract the folder"
+            )
+          })
+          .finally(() => setExtracting(false))
+      }}
+      className="flex size-8 items-center justify-center rounded-lg text-[#4B5160] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] disabled:opacity-50"
+      aria-label={`Extract ${item.name ?? "folder"}`}
+      title="Extract folder"
+    >
+      {extracting ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <FolderOpen className="size-4" strokeWidth={1.75} />
+      )}
+    </button>
   )
 }
 
@@ -204,7 +255,11 @@ function ManifestTransferRow({ item }: { item: ChatItem }) {
   return (
     <article className="group flex items-center gap-3 rounded-xl border border-[#E4E1DA] bg-white px-3 py-3.5 transition-colors hover:border-[#D8D4C9] sm:gap-4 sm:px-4">
       <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#F5F4F0] text-[#4B5160]">
-        <FileTypeIcon name={item.name} mime={item.mime} className="size-9" />
+        {item.folderArchive ? (
+          <FolderArchive className="size-5" strokeWidth={1.75} />
+        ) : (
+          <FileTypeIcon name={item.name} mime={item.mime} className="size-9" />
+        )}
       </div>
 
       <div className="min-w-0 flex-1">
@@ -231,6 +286,9 @@ function ManifestTransferRow({ item }: { item: ChatItem }) {
             className={`ptx-mono shrink-0 text-[11px] text-[#8A8776] ${active ? "" : "md:ml-auto md:w-[108px] md:text-right"}`}
           >
             {sizeLabel}
+            {item.folderArchive && item.fileCount
+              ? ` · ${item.fileCount} files`
+              : ""}
           </div>
           {timeLeft && (
             <div className="flex">
@@ -250,14 +308,14 @@ function ManifestTransferRow({ item }: { item: ChatItem }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
-
-
+        {status === "complete" && <ExtractFolderButton item={item} />}
         {status === "complete" && item.url && (
           <a
             href={item.url}
             download={item.name}
             className="flex size-8 items-center justify-center rounded-lg text-[#4B5160] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
             aria-label={`Download ${item.name ?? "file"}`}
+            title={item.folderArchive ? "Download ZIP" : "Download file"}
           >
             <Download className="size-4" strokeWidth={1.75} />
           </a>
