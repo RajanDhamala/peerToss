@@ -2,6 +2,8 @@ import { create } from "zustand"
 
 import type { ChatItem, SpeedDirection } from "@/components/rtc/types"
 
+export type CallStatus = "idle" | "outgoing" | "incoming" | "active"
+
 export type RtcState = {
   status: string
   peerCreated: boolean
@@ -16,6 +18,8 @@ export type RtcState = {
   speedTestRunning: boolean
   speedTestDirection: SpeedDirection | null
   speedTestWaiting: boolean
+  callStatus: CallStatus
+  callId: string | null
 }
 
 function createInitialState(): RtcState {
@@ -33,6 +37,8 @@ function createInitialState(): RtcState {
     speedTestRunning: false,
     speedTestDirection: null,
     speedTestWaiting: false,
+    callStatus: "idle",
+    callId: null,
   }
 }
 

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { Link } from "react-router"
 import { MessageCircle, Send, Video } from "lucide-react"
 
 import { formatRelativeTime, type ChatItem } from "@/components/rtc/types"
+import type { CallStatus } from "@/global/rtc/rtcStore"
 
 type MessageComponentProps = {
   messages: ChatItem[]
   draft: string
   connected: boolean
+  callStatus: CallStatus
   onDraftChange: (value: string) => void
   onSend: () => void
+  onStartVideoCall: () => void
   inputId?: string
   className?: string
 }
@@ -18,8 +20,10 @@ function MessageComponent({
   messages,
   draft,
   connected,
+  callStatus,
   onDraftChange,
   onSend,
+  onStartVideoCall,
   inputId = "peer-message-draft",
   className = "",
 }: MessageComponentProps) {
@@ -59,17 +63,32 @@ function MessageComponent({
           <MessageCircle className="size-4 text-[#F2A33C]" strokeWidth={1.9} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex ">
+          <div className="flex items-center justify-between gap-2">
             <h2 className="ptx-display text-sm font-semibold text-[#14171F]">
               Messages
             </h2>
-            <div className="w-full flex justify-end mr-10">
-              <button className="hover:scale-105">
-                <Link to="/call">
-                  <Video />
-                </Link>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={onStartVideoCall}
+              disabled={!connected || callStatus !== "idle"}
+              aria-label={
+                callStatus === "outgoing"
+                  ? "Calling peer"
+                  : callStatus === "active"
+                    ? "Video call active"
+                    : "Start video call"
+              }
+              title={connected ? "Start video call" : "Connect to call"}
+              className={`flex size-9 items-center justify-center rounded-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] disabled:cursor-not-allowed ${
+                callStatus === "outgoing"
+                  ? "animate-pulse bg-[#FBEAD2] text-[#B86C0B]"
+                  : callStatus === "active"
+                    ? "bg-[#E7F5F1] text-[#16947F]"
+                    : "bg-[#F5F4F0] text-[#4B5160] hover:scale-105 hover:bg-[#ECE9E1] disabled:text-[#AAA697]"
+              }`}
+            >
+              <Video className="size-[18px]" strokeWidth={1.9} />
+            </button>
           </div>
           <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[#8A8776]">
             <span

@@ -1,7 +1,11 @@
 import { toast } from "react-hot-toast"
 
 import type { ChatItem } from "@/components/rtc/types"
-import type { AppWebSocket } from "@/UserStore"
+import {
+  createFolderArchive,
+  type FolderSourceFile,
+} from "@/Utils/folderArchive"
+import useUserStore, { type AppWebSocket } from "@/UserStore"
 import useRtcStore, { resetRtcStore } from "@/global/rtc/rtcStore"
 
 const SAFE_FILE_CHUNK_SIZE = 16 * 1024
@@ -10,6 +14,11 @@ const BUFFERED_AMOUNT_LOW_THRESHOLD = 256 * 1024
 const PROGRESS_REPORT_INTERVAL = 256 * 1024
 export const RTC_SPEED_TEST_SAMPLE_SIZE = 4 * 1024 * 1024
 const SPEED_TEST_CHUNK_SIZE = 16 * 1024
+const CALL_CONTROL_PROTOCOL = "peertoss-call-v1"
+const SESSION_CONTROL_PROTOCOL = "peertoss-session-v1"
+const PEER_DISCONNECT_GRACE_MS = 8_000
+const SIGNALING_ERROR_TOAST_THROTTLE_MS = 5_000
+const SIGNALING_ERROR_TOAST_ID = "rtc-signaling-error"
 
 const ICE_CONFIG: RTCConfiguration = {
   // Keep the current local-network behavior. Add STUN/TURN here when required.
@@ -21,6 +30,8 @@ type IncomingTransfer = {
   name: string
   size: number
   mime: string
+  folderArchive: boolean
+  fileCount?: number
   receivedBytes: number
   lastReportedBytes: number
   chunks: ArrayBuffer[]
@@ -49,7 +60,43 @@ type SpeedTestControlMessage = {
 type FileControlMessage = SpeedTestControlMessage & {
   name?: unknown
   mime?: unknown
+  folderArchive?: unknown
+  fileCount?: unknown
 }
+
+type FileTransferMetadata = {
+  folderArchive?: boolean
+  fileCount?: number
+}
+
+type CallControlType =
+  | "call-request"
+  | "call-accepted"
+  | "call-rejected"
+  | "call-cancelled"
+  | "call-ended"
+
+type CallControlMessage = {
+  protocol?: unknown
+  type?: unknown
+  callId?: unknown
+  reason?: unknown
+}
+
+type SessionControlMessage = {
+  protocol?: unknown
+  type?: unknown
+}
+
+type SignalingErrorData = {
+  message?: unknown
+  msg?: unknown
+  error?: unknown
+}
+
+type RemoteStreamListener = (stream: MediaStream | null) => void
+
+export type LocalVideoSource = "camera" | "screen"
 
 class RtcSessionController {
   private ws: AppWebSocket | null = null
@@ -61,12 +108,20 @@ class RtcSessionController {
   private incomingSpeedTest: IncomingSpeedTest | null = null
   private speedTestId: string | null = null
   private objectUrls = new Set<string>()
+  private localStream: MediaStream | null = null
+  private localVideoSource: LocalVideoSource | null = null
+  private remoteStream: MediaStream | null = null
+  private remoteStreamListeners = new Set<RemoteStreamListener>()
+  private peerDisconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private peerDisconnectHandled = false
+  private lastSignalingErrorToastAt = 0
 
   attachSocket(socket: AppWebSocket | null) {
     if (this.ws === socket) return
 
     this.detachSocket()
     this.ws = socket
+    if (socket) this.lastSignalingErrorToastAt = 0
 
     socket?.addEventListener("message", this.handleSocketMessage)
     socket?.addEventListener("close", this.handleSocketClose)
@@ -86,6 +141,8 @@ class RtcSessionController {
     if (this.pc && this.pc.connectionState !== "closed") return this.pc
 
     if (this.pc) this.detachPeer(this.pc)
+    this.clearPeerDisconnectTimer()
+    this.peerDisconnectHandled = false
 
     const peer = new RTCPeerConnection(ICE_CONFIG)
     this.pc = peer
@@ -95,8 +152,12 @@ class RtcSessionController {
       "iceconnectionstatechange",
       this.handleIceConnectionStateChange
     )
-    peer.addEventListener("connectionstatechange", this.handleConnectionStateChange)
+    peer.addEventListener(
+      "connectionstatechange",
+      this.handleConnectionStateChange
+    )
     peer.addEventListener("datachannel", this.handleDataChannel)
+    peer.addEventListener("track", this.handleTrack)
 
     useRtcStore.setState({
       peerCreated: true,
@@ -106,23 +167,263 @@ class RtcSessionController {
     return peer
   }
 
+  setLocalStream(
+    stream: MediaStream,
+    videoSource: LocalVideoSource | null = "camera"
+  ) {
+    this.localStream = stream
+    this.localVideoSource = stream.getVideoTracks().length > 0
+      ? videoSource
+      : null
+  }
+
+  getLocalStream() {
+    return this.localStream
+  }
+
+  getLocalVideoSource() {
+    return this.localVideoSource
+  }
+
+  async replaceLocalStream(
+    nextStream: MediaStream,
+    videoSource: LocalVideoSource | null
+  ) {
+    const previousStream = this.localStream
+    if (previousStream === nextStream) {
+      this.localVideoSource = nextStream.getVideoTracks().length > 0
+        ? videoSource
+        : null
+      return this.isLocalStreamPublished()
+    }
+
+    const pc = this.pc
+    const previousTracks = new Set(previousStream?.getTracks() ?? [])
+    const nextTracks = nextStream.getTracks()
+    const retainedStream = previousStream ?? nextStream
+    const publishedSenders = pc
+      ? pc
+          .getSenders()
+          .filter(
+            (sender) => sender.track && previousTracks.has(sender.track)
+          )
+      : []
+    const wasPublished = publishedSenders.length > 0
+    let negotiationRequired = false
+
+    if (pc && wasPublished) {
+      const unmatchedTracks = [...nextTracks]
+
+      for (const sender of publishedSenders) {
+        const previousTrack = sender.track
+        if (!previousTrack) continue
+
+        const replacementIndex = unmatchedTracks.findIndex(
+          (track) => track.kind === previousTrack.kind
+        )
+        const replacementTrack = replacementIndex >= 0
+          ? unmatchedTracks.splice(replacementIndex, 1)[0]
+          : null
+
+        if (replacementTrack !== previousTrack) {
+          await sender.replaceTrack(replacementTrack)
+        }
+      }
+
+      for (const track of unmatchedTracks) {
+        const dormantTransceiver = pc.getTransceivers().find(
+          (transceiver) =>
+            transceiver.sender.track === null &&
+            transceiver.receiver.track.readyState === "live" &&
+            transceiver.receiver.track.kind === track.kind
+        )
+
+        if (dormantTransceiver) {
+          await dormantTransceiver.sender.replaceTrack(track)
+        } else {
+          pc.addTrack(track, retainedStream)
+          negotiationRequired = true
+        }
+      }
+    }
+
+    if (previousStream) {
+      for (const track of previousTracks) {
+        if (!nextTracks.includes(track)) previousStream.removeTrack(track)
+      }
+      for (const track of nextTracks) {
+        if (!previousTracks.has(track)) previousStream.addTrack(track)
+      }
+    }
+
+    this.localStream = retainedStream
+    this.localVideoSource = retainedStream.getVideoTracks().length > 0
+      ? videoSource
+      : null
+
+    const retainedTracks = new Set(nextTracks)
+    for (const track of previousTracks) {
+      if (!retainedTracks.has(track)) track.stop()
+    }
+
+    if (negotiationRequired) await this.createAndSendOffer()
+    return wasPublished
+  }
+
+  isLocalStreamPublished() {
+    const pc = this.pc
+    const stream = this.localStream
+    if (!pc || !stream) return false
+
+    const localTracks = new Set(stream.getTracks())
+    return pc
+      .getSenders()
+      .some((sender) => sender.track && localTracks.has(sender.track))
+  }
+
+  async publishLocalStream() {
+    const pc = this.pc
+    const stream = this.localStream
+    if (!pc) throw new Error("The peer connection has not been created")
+    if (!stream) throw new Error("Start the camera or screen before sending media")
+
+    let trackAdded = false
+    for (const track of stream.getTracks()) {
+      const alreadyAdded = pc
+        .getSenders()
+        .some((sender) => sender.track === track)
+      if (alreadyAdded) continue
+
+      pc.addTrack(track, stream)
+      trackAdded = true
+    }
+
+    if (trackAdded) await this.createAndSendOffer()
+  }
+
+  async unpublishLocalStream() {
+    const pc = this.pc
+    const stream = this.localStream
+    if (!pc || !stream) return
+
+    const localTracks = new Set(stream.getTracks())
+    let trackRemoved = false
+
+    for (const sender of pc.getSenders()) {
+      if (!sender.track || !localTracks.has(sender.track)) continue
+      pc.removeTrack(sender)
+      trackRemoved = true
+    }
+
+    if (trackRemoved) await this.createAndSendOffer()
+  }
+
+  async stopLocalStream({ renegotiate = true }: { renegotiate?: boolean } = {}) {
+    const stream = this.localStream
+    if (!stream) return
+
+    const pc = this.pc
+    const localTracks = new Set(stream.getTracks())
+    let trackRemoved = false
+
+    if (pc) {
+      for (const sender of pc.getSenders()) {
+        if (!sender.track || !localTracks.has(sender.track)) continue
+        pc.removeTrack(sender)
+        trackRemoved = true
+      }
+    }
+
+    for (const track of localTracks) track.stop()
+    this.localStream = null
+    this.localVideoSource = null
+
+    if (trackRemoved && renegotiate) await this.createAndSendOffer()
+  }
+
+  subscribeRemoteStream(listener: RemoteStreamListener) {
+    this.remoteStreamListeners.add(listener)
+    listener(this.remoteStream)
+
+    return () => {
+      this.remoteStreamListeners.delete(listener)
+    }
+  }
+
+  private handleTrack = (event: RTCTrackEvent) => {
+    const eventStream = event.streams[0]
+
+    if (eventStream) {
+      this.remoteStream = eventStream
+    } else {
+      const stream = this.remoteStream ?? new MediaStream()
+      if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track)
+      this.remoteStream = stream
+    }
+
+    this.notifyRemoteStreamListeners()
+  }
+
+  private notifyRemoteStreamListeners() {
+    for (const listener of this.remoteStreamListeners) {
+      listener(this.remoteStream)
+    }
+  }
+
+  private clearRemoteStream() {
+    if (!this.remoteStream) return
+    this.remoteStream = null
+    this.notifyRemoteStreamListeners()
+  }
+
   async sendOffer() {
     const pc = this.pc
-    const ws = this.ws
-    if (!pc || !ws || this.chatChannel || this.fileChannel) return
-
-    this.attachChatChannel(pc.createDataChannel("chat"))
-    this.attachFileChannel(pc.createDataChannel("file"))
-
-    const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-
-    const payload = {
-      event: "create-offer",
-      data: offer,
+    if (!pc) {
+      this.reportSignalingError(
+        new Error("The peer connection has not been created"),
+        "create-offer"
+      )
+      return
     }
-    console.log("sending offer:", payload)
-    ws.send(JSON.stringify(payload))
+
+    if (!this.chatChannel) {
+      this.attachChatChannel(pc.createDataChannel("chat"))
+    }
+    if (!this.fileChannel) {
+      this.attachFileChannel(pc.createDataChannel("file"))
+    }
+
+    try {
+      await this.createAndSendOffer()
+    } catch {
+      // createAndSendOffer already reports signaling failures.
+    }
+  }
+
+  private async createAndSendOffer() {
+    try {
+      const pc = this.pc
+      const ws = this.ws
+      if (!pc || !ws || ws.readyState !== WebSocket.OPEN) {
+        throw new Error("WebRTC signaling is not ready")
+      }
+      if (pc.signalingState !== "stable") {
+        throw new Error("WebRTC negotiation is already in progress")
+      }
+
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+
+      const payload = {
+        event: "create-offer",
+        data: offer,
+      }
+      console.log("sending offer:", payload)
+      ws.send(JSON.stringify(payload))
+    } catch (error) {
+      this.reportSignalingError(error, "create-offer")
+      throw error
+    }
   }
 
   sendMessage(rawMessage: string) {
@@ -151,6 +452,89 @@ class RtcSessionController {
     channel.send(message)
     console.log("send() completed")
     return true
+  }
+
+  requestVideoCall() {
+    const state = useRtcStore.getState()
+    if (state.callStatus !== "idle") {
+      toast.error("A video call is already in progress")
+      return false
+    }
+
+    const callId = crypto.randomUUID()
+    if (!this.sendCallControl("call-request", callId)) return false
+
+    useRtcStore.setState({ callStatus: "outgoing", callId })
+    return true
+  }
+
+  acceptVideoCall() {
+    const { callId, callStatus } = useRtcStore.getState()
+    if (callStatus !== "incoming" || !callId) return false
+    if (!this.sendCallControl("call-accepted", callId)) return false
+
+    useRtcStore.setState({ callStatus: "active" })
+    toast.success("Video call accepted")
+    return true
+  }
+
+  rejectVideoCall() {
+    const { callId, callStatus } = useRtcStore.getState()
+    if (callStatus !== "incoming" || !callId) return false
+
+    this.sendCallControl("call-rejected", callId)
+    useRtcStore.setState({ callStatus: "idle", callId: null })
+    return true
+  }
+
+  cancelVideoCall() {
+    const { callId, callStatus } = useRtcStore.getState()
+    if (callStatus !== "outgoing" || !callId) return false
+
+    this.sendCallControl("call-cancelled", callId)
+    useRtcStore.setState({ callStatus: "idle", callId: null })
+    return true
+  }
+
+  async endVideoCall() {
+    const { callId, callStatus } = useRtcStore.getState()
+    if (callStatus === "active" && callId) {
+      this.sendCallControl("call-ended", callId)
+    }
+
+    try {
+      await this.stopLocalStream()
+    } finally {
+      useRtcStore.setState({ callStatus: "idle", callId: null })
+    }
+  }
+
+  private sendCallControl(
+    type: CallControlType,
+    callId: string,
+    reason?: string
+  ) {
+    const channel = this.chatChannel
+    if (!channel || channel.readyState !== "open") {
+      toast.error("Connect to the peer before starting a video call")
+      return false
+    }
+
+    try {
+      channel.send(
+        JSON.stringify({
+          protocol: CALL_CONTROL_PROTOCOL,
+          type,
+          callId,
+          ...(reason ? { reason } : {}),
+        })
+      )
+      return true
+    } catch (error) {
+      console.error("Could not send video call control message", error)
+      toast.error("The video call request could not be sent")
+      return false
+    }
   }
 
   async runSpeedTest() {
@@ -201,23 +585,87 @@ class RtcSessionController {
     }
   }
 
-  async sendFile(file: File) {
+  private beginFileTransfer() {
     const channel = this.fileChannel
     if (!channel || channel.readyState !== "open") {
       toast.error("The file channel is not ready yet")
-      return
+      return null
     }
     if (this.speedTestId) {
       toast.error("Wait for the speed test to finish")
+      return null
+    }
+    if (this.outgoingFile) {
+      toast.error("Finish the active file transfer first")
+      return null
+    }
+
+    this.outgoingFile = true
+    useRtcStore.setState({ sendingFile: true })
+    return channel
+  }
+
+  private finishFileTransfer() {
+    this.outgoingFile = false
+    useRtcStore.setState({ sendingFile: false })
+  }
+
+  async sendFile(file: File) {
+    const channel = this.beginFileTransfer()
+    if (!channel) return
+
+    try {
+      await this.transferFile(file, channel)
+    } finally {
+      this.finishFileTransfer()
+    }
+  }
+
+  async sendFolder(
+    files: Array<File | FolderSourceFile>,
+    ignoredEntryCount = 0,
+    ignoreGenerated = true
+  ) {
+    if (files.length === 0) {
+      toast.error("Choose a folder with at least one file")
       return
     }
 
+    const channel = this.beginFileTransfer()
+    if (!channel) return
+
+    const preparingToast = toast.loading(`Zipping ${files.length} files…`)
+    try {
+      const archive = await createFolderArchive(files, { ignoreGenerated })
+      toast.dismiss(preparingToast)
+      const ignoredCount = ignoredEntryCount + archive.ignoredCount
+      if (ignoredCount > 0) {
+        toast(`Skipped ${ignoredCount} generated or cache ${ignoredCount === 1 ? "entry" : "entries"}`)
+      }
+      await this.transferFile(archive.file, channel, {
+        folderArchive: true,
+        fileCount: archive.fileCount,
+      })
+    } catch (error) {
+      console.error("Folder preparation failed", error)
+      toast.dismiss(preparingToast)
+      toast.error(
+        error instanceof Error ? error.message : "Could not prepare the folder"
+      )
+    } finally {
+      this.finishFileTransfer()
+    }
+  }
+
+  private async transferFile(
+    file: File,
+    channel: RTCDataChannel,
+    metadata: FileTransferMetadata = {}
+  ) {
     const fileId = crypto.randomUUID()
     const previewUrl = URL.createObjectURL(file)
     this.objectUrls.add(previewUrl)
 
-    this.outgoingFile = true
-    useRtcStore.setState({ sendingFile: true })
     this.updateMessages((messages) => [
       ...messages,
       {
@@ -229,25 +677,27 @@ class RtcSessionController {
         name: file.name,
         size: file.size,
         mime: file.type,
+        folderArchive: metadata.folderArchive,
+        fileCount: metadata.fileCount,
         transferredBytes: 0,
         transferStatus: "sending",
       },
     ])
 
     try {
-      await this.uploadFile(file, fileId)
+      await this.uploadFile(file, fileId, metadata)
       this.updateMessages((messages) =>
         messages.map((item) =>
           item.id === fileId
             ? {
-                ...item,
-                transferredBytes: file.size,
-                transferStatus: "complete",
-              }
+              ...item,
+              transferredBytes: file.size,
+              transferStatus: "complete",
+            }
             : item
         )
       )
-      toast.success("File sent")
+      toast.success(metadata.folderArchive ? "Folder sent" : "File sent")
     } catch (error) {
       console.error("File transfer failed", error)
       if (channel.readyState === "open") {
@@ -263,17 +713,21 @@ class RtcSessionController {
         )
       )
       toast.error("File transfer failed")
-    } finally {
-      this.outgoingFile = false
-      useRtcStore.setState({ sendingFile: false })
     }
   }
 
-  endSession({ closeSocket = true }: { closeSocket?: boolean } = {}) {
+  endSession({
+    closeSocket = true,
+    notifyPeer = true,
+  }: { closeSocket?: boolean; notifyPeer?: boolean } = {}) {
     const socket = this.ws
     const peer = this.pc
     const chatChannel = this.chatChannel
     const fileChannel = this.fileChannel
+
+    if (notifyPeer) this.sendPeerLeaving()
+    this.clearPeerDisconnectTimer()
+    this.peerDisconnectHandled = true
 
     this.detachSocket()
     this.detachChatChannel(chatChannel)
@@ -295,9 +749,67 @@ class RtcSessionController {
     this.incomingSpeedTest = null
     this.speedTestId = null
 
+    this.localStream?.getTracks().forEach((track) => track.stop())
+    this.localStream = null
+    this.localVideoSource = null
+    this.clearRemoteStream()
+
     for (const url of this.objectUrls) URL.revokeObjectURL(url)
     this.objectUrls.clear()
     resetRtcStore()
+  }
+
+  private sendPeerLeaving() {
+    const channel = this.chatChannel
+    if (!channel || channel.readyState !== "open") return
+
+    try {
+      channel.send(
+        JSON.stringify({
+          protocol: SESSION_CONTROL_PROTOCOL,
+          type: "peer-leaving",
+        })
+      )
+    } catch (error) {
+      console.warn("Could not notify the peer before leaving", error)
+    }
+  }
+
+  private clearPeerDisconnectTimer() {
+    if (this.peerDisconnectTimer === null) return
+    clearTimeout(this.peerDisconnectTimer)
+    this.peerDisconnectTimer = null
+  }
+
+  private schedulePeerDisconnect() {
+    if (this.peerDisconnectHandled || this.peerDisconnectTimer !== null) return
+
+    this.peerDisconnectTimer = setTimeout(() => {
+      this.peerDisconnectTimer = null
+
+      const connectionState = this.pc?.connectionState
+      const iceConnectionState = this.pc?.iceConnectionState
+      if (
+        connectionState === "disconnected" ||
+        iceConnectionState === "disconnected"
+      ) {
+        this.handlePeerDisconnected()
+      }
+    }, PEER_DISCONNECT_GRACE_MS)
+  }
+
+  private handlePeerDisconnected() {
+    if (this.peerDisconnectHandled) return
+
+    this.peerDisconnectHandled = true
+    const socket = this.ws
+    this.endSession({ notifyPeer: false })
+
+    const userStore = useUserStore.getState()
+    if (!socket || userStore.ws === socket) userStore.setWs(null)
+
+    useRtcStore.setState({ status: "disconnected" })
+    toast.error("The other device left the room")
   }
 
   private updateMessages(updater: (messages: ChatItem[]) => ChatItem[]) {
@@ -368,6 +880,8 @@ class RtcSessionController {
       this.handleConnectionStateChange
     )
     peer.removeEventListener("datachannel", this.handleDataChannel)
+    peer.removeEventListener("track", this.handleTrack)
+    this.clearRemoteStream()
     if (this.pc === peer) this.pc = null
   }
 
@@ -381,15 +895,18 @@ class RtcSessionController {
       return
     }
 
+    if (message.event === "error") {
+      const errorMessage = this.getSignalingErrorMessage(
+        message.data,
+        "The WebRTC handshake failed"
+      )
+      console.error("Signaling server error:", message.data)
+      this.handleSignalingFailure(errorMessage)
+      return
+    }
+
     if (message.event === "user-left") {
-      useRtcStore.setState({
-        status: "disconnected",
-        chatReady: false,
-        fileReady: false,
-      })
-      this.failIncomingTransfer()
-      this.stopSpeedTest()
-      toast.error("The other device left the room")
+      this.handlePeerDisconnected()
       return
     }
 
@@ -413,7 +930,80 @@ class RtcSessionController {
       }
     } catch (error) {
       console.error("WebRTC signaling message failed", error)
+      this.reportSignalingError(
+        error,
+        typeof message.event === "string" ? message.event : "unknown"
+      )
     }
+  }
+
+  private getSignalingErrorMessage(error: unknown, fallback: string) {
+    if (error instanceof Error && error.message.trim()) return error.message
+    if (typeof error === "string" && error.trim()) return error
+
+    if (error && typeof error === "object") {
+      const data = error as SignalingErrorData
+      for (const value of [data.message, data.msg, data.error]) {
+        if (typeof value === "string" && value.trim()) return value
+      }
+    }
+
+    return fallback
+  }
+
+  private showSignalingErrorToast(errorMessage: string) {
+    const now = Date.now()
+    if (
+      now - this.lastSignalingErrorToastAt <
+      SIGNALING_ERROR_TOAST_THROTTLE_MS
+    ) {
+      return
+    }
+
+    this.lastSignalingErrorToastAt = now
+    toast.error(errorMessage, { id: SIGNALING_ERROR_TOAST_ID })
+  }
+
+  private handleSignalingFailure(errorMessage: string) {
+    const peer = this.pc
+
+    if (peer && peer.connectionState !== "connected") {
+      const socket = this.ws
+      this.endSession({ notifyPeer: false })
+
+      const userStore = useUserStore.getState()
+      if (!socket || userStore.ws === socket) userStore.setWs(null)
+    }
+
+    useRtcStore.setState({ status: "signaling error" })
+    this.showSignalingErrorToast(errorMessage)
+  }
+
+  private reportSignalingError(error: unknown, phase: string) {
+    const errorMessage = this.getSignalingErrorMessage(
+      error,
+      "The WebRTC handshake failed"
+    )
+    console.error(`WebRTC signaling failed during ${phase}:`, error)
+
+    const ws = this.ws
+    if (ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "rtc-error",
+            data: {
+              phase,
+              message: errorMessage,
+            },
+          })
+        )
+      } catch (sendError) {
+        console.error("Could not send the signaling error to the server", sendError)
+      }
+    }
+
+    this.handleSignalingFailure(errorMessage)
   }
 
   private handleSocketClose = () => {
@@ -429,7 +1019,9 @@ class RtcSessionController {
   private sendAnswer = async () => {
     const pc = this.pc
     const ws = this.ws
-    if (!pc || !ws) return
+    if (!pc || !ws || ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebRTC signaling is not ready")
+    }
 
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
@@ -444,14 +1036,20 @@ class RtcSessionController {
 
   private sendIceCandidate = async (ice: RTCIceCandidate) => {
     const ws = this.ws
-    if (!ws || !this.pc) return
+    try {
+      if (!ws || !this.pc || ws.readyState !== WebSocket.OPEN) {
+        throw new Error("WebRTC signaling is not ready")
+      }
 
-    const payload = {
-      event: "send-ice-candiate",
-      data: ice,
+      const payload = {
+        event: "send-ice-candiate",
+        data: ice,
+      }
+      console.log("sending Ice-Candidate")
+      ws.send(JSON.stringify(payload))
+    } catch (error) {
+      this.reportSignalingError(error, "send-ice-candidate")
     }
-    console.log("sending Ice-Candidate")
-    ws.send(JSON.stringify(payload))
   }
 
   private handleIceCandidate = (event: RTCPeerConnectionIceEvent) => {
@@ -459,13 +1057,41 @@ class RtcSessionController {
   }
 
   private handleIceConnectionStateChange = () => {
-    if (this.pc) console.log("ice state:", this.pc.iceConnectionState)
+    const pc = this.pc
+    if (!pc) return
+
+    console.log("ice state:", pc.iceConnectionState)
+    if (
+      pc.iceConnectionState === "connected" ||
+      pc.iceConnectionState === "completed"
+    ) {
+      this.clearPeerDisconnectTimer()
+    } else if (pc.iceConnectionState === "disconnected") {
+      useRtcStore.setState({ status: "disconnected" })
+      this.schedulePeerDisconnect()
+    } else if (
+      pc.iceConnectionState === "failed" ||
+      pc.iceConnectionState === "closed"
+    ) {
+      this.handlePeerDisconnected()
+    }
   }
 
   private handleConnectionStateChange = () => {
-    if (!this.pc) return
-    console.log("pc state:", this.pc.connectionState)
-    useRtcStore.setState({ status: this.pc.connectionState })
+    const pc = this.pc
+    if (!pc) return
+
+    const connectionState = pc.connectionState
+    console.log("pc state:", connectionState)
+    useRtcStore.setState({ status: connectionState })
+
+    if (connectionState === "connected") {
+      this.clearPeerDisconnectTimer()
+    } else if (connectionState === "disconnected") {
+      this.schedulePeerDisconnect()
+    } else if (connectionState === "failed" || connectionState === "closed") {
+      this.handlePeerDisconnected()
+    }
   }
 
   private handleDataChannel = (event: RTCDataChannelEvent) => {
@@ -483,6 +1109,14 @@ class RtcSessionController {
 
   private handleChatMessage = (event: MessageEvent) => {
     console.log("MESSAGE RECEIVED:", event.data)
+    if (
+      typeof event.data === "string" &&
+      (this.handleSessionControlMessage(event.data) ||
+        this.handleCallControlMessage(event.data))
+    ) {
+      return
+    }
+
     this.updateMessages((messages) => [
       ...messages,
       {
@@ -495,14 +1129,86 @@ class RtcSessionController {
     ])
   }
 
+  private handleSessionControlMessage(rawMessage: string) {
+    let message: SessionControlMessage
+    try {
+      message = JSON.parse(rawMessage) as SessionControlMessage
+    } catch {
+      return false
+    }
+
+    if (message.protocol !== SESSION_CONTROL_PROTOCOL) return false
+    if (message.type === "peer-leaving") this.handlePeerDisconnected()
+    return true
+  }
+
+  private handleCallControlMessage(rawMessage: string) {
+    let message: CallControlMessage
+    try {
+      message = JSON.parse(rawMessage) as CallControlMessage
+    } catch {
+      return false
+    }
+
+    if (message.protocol !== CALL_CONTROL_PROTOCOL) return false
+    if (typeof message.type !== "string" || typeof message.callId !== "string") {
+      return true
+    }
+
+    const state = useRtcStore.getState()
+    const callId = message.callId
+
+    if (message.type === "call-request") {
+      if (state.callStatus === "idle") {
+        useRtcStore.setState({ callStatus: "incoming", callId })
+        toast("Incoming video call", { icon: "📹" })
+      } else if (state.callId !== callId) {
+        this.sendCallControl("call-rejected", callId, "busy")
+      }
+      return true
+    }
+
+    if (state.callId !== callId) return true
+
+    if (message.type === "call-accepted" && state.callStatus === "outgoing") {
+      useRtcStore.setState({ callStatus: "active" })
+      toast.success("Peer accepted the video call")
+      return true
+    }
+
+    if (message.type === "call-rejected" && state.callStatus === "outgoing") {
+      useRtcStore.setState({ callStatus: "idle", callId: null })
+      toast.error(
+        message.reason === "busy"
+          ? "Peer is already in another call"
+          : "Peer declined the video call"
+      )
+      return true
+    }
+
+    if (message.type === "call-cancelled" && state.callStatus === "incoming") {
+      useRtcStore.setState({ callStatus: "idle", callId: null })
+      toast("Peer cancelled the video call")
+      return true
+    }
+
+    if (message.type === "call-ended" && state.callStatus === "active") {
+      useRtcStore.setState({ callStatus: "idle", callId: null })
+      void this.stopLocalStream({ renegotiate: false })
+      toast("Peer ended the video call")
+      return true
+    }
+
+    return true
+  }
+
   private handleChatClose = () => {
     console.log("chat channel is closed")
-    useRtcStore.setState({ chatReady: false })
-    toast.error("chat channel closed")
+    this.handlePeerDisconnected()
   }
 
   private handleChatError = () => {
-    useRtcStore.setState({ chatReady: false })
+    this.handlePeerDisconnected()
   }
 
   private handleFileOpen = () => {
@@ -517,15 +1223,11 @@ class RtcSessionController {
 
   private handleFileClose = () => {
     console.log("file channel is closed")
-    useRtcStore.setState({ fileReady: false })
-    this.failIncomingTransfer()
-    this.stopSpeedTest()
+    this.handlePeerDisconnected()
   }
 
   private handleFileError = () => {
-    useRtcStore.setState({ fileReady: false })
-    this.failIncomingTransfer()
-    this.stopSpeedTest()
+    this.handlePeerDisconnected()
   }
 
   private onFileChannelMessage(event: MessageEvent) {
@@ -573,12 +1275,19 @@ class RtcSessionController {
         typeof data.mime === "string" && data.mime
           ? data.mime
           : "application/octet-stream"
+      const folderArchive = data.folderArchive === true
+      const fileCount =
+        typeof data.fileCount === "number" && data.fileCount >= 0
+          ? data.fileCount
+          : undefined
 
       this.incomingTransfer = {
         fileId,
         name: data.name,
         size: data.size,
         mime,
+        folderArchive,
+        fileCount,
         receivedBytes: 0,
         lastReportedBytes: 0,
         chunks: [],
@@ -593,6 +1302,8 @@ class RtcSessionController {
           name: data.name as string,
           size: data.size as number,
           mime,
+          folderArchive,
+          fileCount,
           transferredBytes: 0,
           transferStatus: "receiving",
         },
@@ -616,7 +1327,7 @@ class RtcSessionController {
     const shouldReportProgress =
       received.lastReportedBytes === 0 ||
       received.receivedBytes - received.lastReportedBytes >=
-        PROGRESS_REPORT_INTERVAL ||
+      PROGRESS_REPORT_INTERVAL ||
       received.receivedBytes >= received.size
 
     if (shouldReportProgress) {
@@ -625,12 +1336,12 @@ class RtcSessionController {
         messages.map((item) =>
           item.id === received.fileId
             ? {
-                ...item,
-                transferredBytes: Math.min(
-                  received.receivedBytes,
-                  received.size
-                ),
-              }
+              ...item,
+              transferredBytes: Math.min(
+                received.receivedBytes,
+                received.size
+              ),
+            }
             : item
         )
       )
@@ -656,11 +1367,11 @@ class RtcSessionController {
       messages.map((item) =>
         item.id === received.fileId
           ? {
-              ...item,
-              url,
-              transferredBytes: received.size,
-              transferStatus: "complete",
-            }
+            ...item,
+            url,
+            transferredBytes: received.size,
+            transferStatus: "complete",
+          }
           : item
       )
     )
@@ -743,7 +1454,7 @@ class RtcSessionController {
       })
     )
 
-    for (let sentBytes = 0; sentBytes < RTC_SPEED_TEST_SAMPLE_SIZE; ) {
+    for (let sentBytes = 0; sentBytes < RTC_SPEED_TEST_SAMPLE_SIZE;) {
       if (channel.readyState !== "open") {
         throw new Error("File channel closed during speed test")
       }
@@ -908,7 +1619,11 @@ class RtcSessionController {
     })
   }
 
-  private async uploadFile(file: File, fileId: string) {
+  private async uploadFile(
+    file: File,
+    fileId: string,
+    metadata: FileTransferMetadata = {}
+  ) {
     const channel = this.fileChannel
     if (!channel || channel.readyState !== "open") {
       throw new Error("File channel is not open")
@@ -928,6 +1643,8 @@ class RtcSessionController {
         name: file.name,
         size: file.size,
         mime: file.type,
+        folderArchive: metadata.folderArchive,
+        fileCount: metadata.fileCount,
       })
     )
 

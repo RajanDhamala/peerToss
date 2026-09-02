@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
 
 	"http-server/internal/utils"
 )
@@ -19,13 +21,36 @@ func Auth(next http.HandlerFunc) http.HandlerFunc {
 					utils.UserKey,
 					claims,
 				)
-				fmt.Println("userid:", claims.ID)
 
 				next(w, r.WithContext(ctx))
 				return
 			}
 		}
 
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		NewUserId := uuid.NewString()
+
+		NewToken, Claims, err := utils.CreateUserToken(NewUserId)
+		if err != nil {
+			http.Error(w, "failed to create token", http.StatusInternalServerError)
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "client_id",
+			Value:    NewToken,
+			HttpOnly: true,
+			Secure:   false,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+			Expires:  time.Now().Add(24 * 3 * time.Hour),
+		})
+
+		ctx := context.WithValue(
+			r.Context(),
+			utils.UserKey,
+			Claims,
+		)
+		next(w, r.WithContext(ctx))
+		return
 	}
 }

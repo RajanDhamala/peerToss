@@ -8,6 +8,8 @@ export type ChatItem = {
   name?: string
   size?: number
   mime?: string
+  folderArchive?: boolean
+  fileCount?: number
   transferredBytes?: number
   transferStatus?: "sending" | "receiving" | "complete" | "failed"
 }
