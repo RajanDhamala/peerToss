@@ -1,5 +1,12 @@
 import { useState } from "react"
-import { AppWindow, Check, Monitor, PanelsTopLeft } from "lucide-react"
+import {
+  AppWindow,
+  ArrowRight,
+  Check,
+  Monitor,
+  PanelsTopLeft,
+  ShieldCheck,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -22,19 +29,19 @@ const sourceOptions: Array<{
   {
     value: "browser",
     title: "Browser tab",
-    description: "Share one browser tab without exposing the rest of your desktop.",
+    description: "A single tab",
     icon: PanelsTopLeft,
   },
   {
     value: "window",
     title: "App window",
-    description: "Share one application window while keeping other apps private.",
+    description: "One open application",
     icon: AppWindow,
   },
   {
     value: "monitor",
     title: "Entire screen",
-    description: "Share everything visible on one of your displays.",
+    description: "Everything on one display",
     icon: Monitor,
   },
 ]
@@ -64,71 +71,77 @@ export function ScreenShareSourceDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto border-white/10 bg-[#111214] text-white shadow-2xl sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-xl">What would you like to share?</DialogTitle>
-          <DialogDescription className="text-white/55">
-            Choose a source type. Your browser will still ask you to confirm the
-            exact tab, window, or display.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto border-white/10 bg-[#111214] p-0 text-white shadow-2xl sm:max-w-md">
+        <div className="p-5 sm:p-6">
+          <DialogHeader className="pr-8 text-left">
+            <DialogTitle className="text-lg font-semibold">
+              Share your screen
+            </DialogTitle>
+            <DialogDescription className="text-sm leading-relaxed text-white/55">
+              Choose what you want the browser picker to show first.
+            </DialogDescription>
+          </DialogHeader>
 
-        <fieldset className="grid gap-3 sm:grid-cols-3">
-          <legend className="sr-only">Screen sharing source</legend>
-          {sourceOptions.map((option) => {
-            const selected = selectedSource === option.value
-            const Icon = option.icon
+          <fieldset className="mt-5 overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+            <legend className="sr-only">Screen sharing source</legend>
+            {sourceOptions.map((option) => {
+              const selected = selectedSource === option.value
+              const Icon = option.icon
 
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setSelectedSource(option.value)}
-                className={`relative flex min-h-32 flex-col items-start rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 sm:min-h-44 ${
-                  selected
-                    ? "border-emerald-400 bg-emerald-400/10"
-                    : "border-white/10 bg-[#1B1D20] hover:border-white/25 hover:bg-[#222428]"
-                }`}
-                aria-pressed={selected}
-              >
-                <span
-                  className={`grid size-11 place-items-center rounded-xl ${
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setSelectedSource(option.value)}
+                  className={`flex w-full items-center gap-3 border-b border-white/10 px-3.5 py-3 text-left transition-colors last:border-b-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
                     selected
-                      ? "bg-emerald-400 text-black"
-                      : "bg-white/10 text-white/75"
+                      ? "bg-white/[0.09]"
+                      : "hover:bg-white/[0.06]"
                   }`}
+                  aria-pressed={selected}
                 >
-                  <Icon className="size-5" strokeWidth={1.8} />
-                </span>
+                  <span
+                    className={`grid size-9 shrink-0 place-items-center rounded-lg ${
+                      selected
+                        ? "bg-emerald-400 text-[#111214]"
+                        : "bg-white/[0.08] text-white/65"
+                    }`}
+                    aria-hidden="true"
+                  >
+                    <Icon className="size-4" strokeWidth={1.9} />
+                  </span>
 
-                <span className="mt-5 text-sm font-semibold">
-                  {option.title}
-                </span>
-                <span className="mt-1 text-xs leading-relaxed text-white/50">
-                  {option.description}
-                </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-white">
+                      {option.title}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-white/45">
+                      {option.description}
+                    </span>
+                  </span>
 
-                <span
-                  className={`absolute right-3 top-3 grid size-5 place-items-center rounded-full border ${
-                    selected
-                      ? "border-emerald-400 bg-emerald-400 text-black"
-                      : "border-white/20 text-transparent"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <Check className="size-3" strokeWidth={2.5} />
-                </span>
-              </button>
-            )
-          })}
-        </fieldset>
+                  <span
+                    className={`grid size-5 shrink-0 place-items-center rounded-full border ${
+                      selected
+                        ? "border-emerald-400 bg-emerald-400 text-[#111214]"
+                        : "border-white/20 text-transparent"
+                    }`}
+                    aria-hidden="true"
+                  >
+                    <Check className="size-3" strokeWidth={2.5} />
+                  </span>
+                </button>
+              )
+            })}
+          </fieldset>
 
-        <p className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs leading-relaxed text-white/50">
-          For your privacy, websites cannot bypass or style the browser&apos;s
-          final sharing confirmation.
-        </p>
+          <p className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-white/45">
+            <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-white/55" />
+            You&apos;ll confirm the exact source in your browser next.
+          </p>
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="border-t border-white/10 bg-white/[0.02] p-4 sm:justify-end">
           <Button
             type="button"
             variant="ghost"
@@ -142,7 +155,8 @@ export function ScreenShareSourceDialog({
             className="bg-emerald-400 text-black hover:bg-emerald-300"
             onClick={handleShare}
           >
-            Start sharing
+            Continue
+            <ArrowRight className="size-4" />
           </Button>
         </DialogFooter>
       </DialogContent>

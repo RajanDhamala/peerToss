@@ -3,6 +3,7 @@ package controller
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -13,12 +14,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 const (
-	pongWait   = 65 * time.Second
-	pingPeriod = 60 * time.Second
-	writeWait  = 10 * time.Second
+	pongWait       = 65 * time.Second
+	pingPeriod     = 60 * time.Second
+	writeWait      = 10 * time.Second
+	wsMessageRate  = rate.Limit(2)
+	wsMessageBurst = 40
+	wsMessageLimit = 64 * 1024
 )
 
 var Domain = os.Getenv("DOMAIN")
@@ -39,6 +44,7 @@ type Client struct {
 	Send      chan any
 	Done      chan struct{}
 	CloseOnce sync.Once
+	Limiter   *rate.Limiter
 }
 
 func (client *Client) Close() {
@@ -68,16 +74,27 @@ func sendClientMessage(client *Client, message any) bool {
 }
 
 type Session struct {
-	ID        string
-	CreatedBy string
-	User1     *Client
-	User2     *Client
-	State     string
+	ID    string
+	User1 *Client
+	User2 *Client
+}
+
+func getSessionPeer(session *Session, client *Client) *Client {
+	if session == nil || client == nil {
+		return nil
+	}
+
+	if session.User1 == client {
+		return session.User2
+	}
+	if session.User2 == client {
+		return session.User1
+	}
+
+	return nil
 }
 
 var (
-	ActiveClients  = make(map[string]*Client)
-	ClientMu       sync.RWMutex
 	ActiveSessions = make(map[string]*Session)
 	SessionsMu     sync.RWMutex
 )
@@ -115,6 +132,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		SessionId: seesionInfo.ID,
 		Send:      make(chan any, 5),
 		Done:      make(chan struct{}),
+		Limiter:   rate.NewLimiter(wsMessageRate, wsMessageBurst),
 	}
 
 	go func() {
@@ -145,10 +163,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	ClientMu.Lock()
-	ActiveClients[user.ID] = &client
-	ClientMu.Unlock()
-	conn.SetReadLimit(24 * 1024) // 24 kb max palyload size
+	conn.SetReadLimit(wsMessageLimit)
 
 	// Initial read deadline.
 	conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -157,17 +172,9 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
-	msg := WsMessage{}
-
 	// cleanup
 	defer func() {
 		client.Close()
-
-		ClientMu.Lock()
-		if ActiveClients[user.ID] == &client {
-			delete(ActiveClients, user.ID)
-		}
-		ClientMu.Unlock()
 
 		SessionsMu.Lock()
 		activeSession := ActiveSessions[seesionInfo.ID]
@@ -185,10 +192,8 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if seesionInfo.Role == "creator" {
 		data := Session{
-			ID:        seesionInfo.ID,
-			CreatedBy: user.ID,
-			User1:     &client,
-			State:     "waiting",
+			ID:    seesionInfo.ID,
+			User1: &client,
 		}
 		SessionsMu.Lock()
 		ActiveSessions[seesionInfo.ID] = &data
@@ -213,25 +218,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		ClientMu.RLock()
-		owner, ok := ActiveClients[data.CreatedBy]
-		ClientMu.RUnlock()
-		if !ok {
-			conn.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(
-					websocket.CloseNormalClosure,
-					"session owner disconnected",
-				),
-				time.Now().Add(writeWait),
-			)
-
-			return
-		}
-
-		if !sendClientMessage(owner, WsMessage{
-			Event: "user-joined",
-		}) {
+		if !sendClientMessage(data.User1, WsMessage{Event: "user-joined"}) {
 			return
 		}
 
@@ -243,13 +230,34 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for {
+		// Keep each queued payload on its own backing buffer. Reusing one
+		// WsMessage lets a later ICE read overwrite data still being written.
+		msg := WsMessage{}
 		err := conn.ReadJSON(&msg)
 		if err != nil {
+			fmt.Printf(
+				"websocket read ended: session=%s role=%s error=%v\n",
+				seesionInfo.ID,
+				seesionInfo.Role,
+				err,
+			)
 			break
+		}
+		if !client.Limiter.Allow() {
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(
+					websocket.ClosePolicyViolation,
+					"signaling rate limit exceeded",
+				),
+				time.Now().Add(writeWait),
+			)
+			return
 		}
 
 		switch msg.Event {
 		case "create-offer":
+			fmt.Println("offer")
 
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
@@ -258,12 +266,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			var peer *Client
-			if resthai.CreatedBy != user.ID {
-				peer = resthai.User1
-			} else {
-				peer = resthai.User2
-			}
+			peer := getSessionPeer(resthai, &client)
 			SessionsMu.RUnlock()
 
 			payload := map[string]any{
@@ -277,6 +280,8 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 		case "create-answer":
 
+			fmt.Println("answer")
+
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
 			if !ok {
@@ -286,12 +291,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			var peer *Client
-			if user.ID != resthai.CreatedBy {
-				peer = resthai.User1
-			} else {
-				peer = resthai.User2
-			}
+			peer := getSessionPeer(resthai, &client)
 			SessionsMu.RUnlock()
 
 			payload := map[string]any{
@@ -303,7 +303,9 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-		case "send-ice-candiate":
+		case "send-ice-candidate", "send-ice-candiate":
+
+			fmt.Println("ice-candidate")
 
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
@@ -314,12 +316,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			var peer *Client
-			if user.ID != resthai.CreatedBy {
-				peer = resthai.User1
-			} else {
-				peer = resthai.User2
-			}
+			peer := getSessionPeer(resthai, &client)
 			SessionsMu.RUnlock()
 
 			payload := map[string]any{
@@ -331,37 +328,8 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-		case "rtc-error":
-			// any error during the rtc handshake
-
-			SessionsMu.RLock()
-			resthai, ok := ActiveSessions[seesionInfo.ID]
-			if !ok {
-				SessionsMu.RUnlock()
-				// meaing session not found so we will drop ws conn as we cannot establish handshake without it
-				// simple return invokes the orginal defer fxn and flushes all stuff
-				return
-			}
-
-			var peer *Client
-			if user.ID != resthai.CreatedBy {
-				peer = resthai.User1
-			} else {
-				peer = resthai.User2
-			}
-			SessionsMu.RUnlock()
-
-			payload := map[string]any{
-				"event": "error",
-				"data":  msg.Data,
-			}
-
-			if !sendClientMessage(peer, payload) {
-				return
-			}
-
 		default:
-			return
+			continue
 		}
 
 	}

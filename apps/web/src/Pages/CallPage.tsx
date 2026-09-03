@@ -6,7 +6,6 @@ import {
   Mic,
   MicOff,
   PhoneOff,
-  RadioTower,
   ScreenShare,
   ScreenShareOff,
   UserRound,
@@ -93,7 +92,7 @@ const CallPage = () => {
     incomingItemCount
   )
   const [pendingAction, setPendingAction] = useState<
-    "camera" | "screen" | "share" | "stop" | null
+    "camera" | "screen" | "stop" | null
   >(null)
   const [mediaError, setMediaError] = useState<string | null>(null)
   const unreadCount = conversationOpen
@@ -154,24 +153,29 @@ const CallPage = () => {
 
   const startVideo = async () => {
     setMediaError(null)
-    const existingStream = rtcSession.getLocalStream()
-    const existingVideoTrack = existingStream
-      ?.getVideoTracks()
-      .find((track) => track.readyState === "live")
-
-    if (
-      rtcSession.getLocalVideoSource() === "camera" &&
-      existingStream &&
-      existingVideoTrack
-    ) {
-      existingVideoTrack.enabled = true
-      showLocalStream(existingStream)
-      return
-    }
-
     setPendingAction("camera")
     let capturedStream: MediaStream | null = null
+
     try {
+      const existingStream = rtcSession.getLocalStream()
+      const existingVideoTrack = existingStream
+        ?.getVideoTracks()
+        .find((track) => track.readyState === "live")
+
+      if (
+        rtcSession.getLocalVideoSource() === "camera" &&
+        existingStream &&
+        existingVideoTrack
+      ) {
+        existingVideoTrack.enabled = true
+        showLocalStream(existingStream)
+        if (!rtcSession.isLocalStreamPublished()) {
+          await rtcSession.publishLocalStream()
+          setMediaPublished(rtcSession.isLocalStreamPublished())
+        }
+        return
+      }
+
       const existingAudioTracks =
         existingStream
           ?.getAudioTracks()
@@ -187,24 +191,32 @@ const CallPage = () => {
         ? existingAudioTracks
         : capturedStream.getAudioTracks()
       const nextStream = new MediaStream([...audioTracks, cameraTrack])
+      const wasPublished = existingStream
+        ? await rtcSession.replaceLocalStream(nextStream, "camera")
+        : false
 
-      if (existingStream) {
-        await rtcSession.replaceLocalStream(nextStream, "camera")
-      } else {
-        rtcSession.setLocalStream(nextStream, "camera")
-      }
-
+      if (!existingStream) rtcSession.setLocalStream(nextStream, "camera")
       showLocalStream(rtcSession.getLocalStream() ?? nextStream)
+      if (!wasPublished) {
+        await rtcSession.publishLocalStream()
+        setMediaPublished(rtcSession.isLocalStreamPublished())
+      }
     } catch (error) {
       console.error("Could not start local media", error)
-      const activeTracks = new Set(
-        rtcSession.getLocalStream()?.getTracks() ?? []
-      )
+      const localStream = rtcSession.getLocalStream()
+      const activeTracks = new Set(localStream?.getTracks() ?? [])
       capturedStream
         ?.getTracks()
         .filter((track) => !activeTracks.has(track))
         .forEach((track) => track.stop())
-      setMediaError("Camera or microphone access was not available.")
+
+      if (localStream) showLocalStream(localStream)
+      setMediaPublished(rtcSession.isLocalStreamPublished())
+      setMediaError(
+        localStream?.getVideoTracks().some((track) => track.readyState === "live")
+          ? "Your camera is ready locally, but it could not be sent to the peer."
+          : "Camera or microphone access was not available."
+      )
     } finally {
       setPendingAction(null)
     }
@@ -345,24 +357,6 @@ const CallPage = () => {
 
     audioTrack.enabled = !audioTrack.enabled
     setMicrophoneActive(audioTrack.enabled)
-  }
-
-  const toggleShare = async () => {
-    setMediaError(null)
-    setPendingAction("share")
-    try {
-      if (mediaPublished) {
-        await rtcSession.unpublishLocalStream()
-      } else {
-        await rtcSession.publishLocalStream()
-      }
-    } catch (error) {
-      console.error("Could not update media sharing", error)
-      setMediaError("Video sharing could not be updated for the peer.")
-    } finally {
-      setMediaPublished(rtcSession.isLocalStreamPublished())
-      setPendingAction(null)
-    }
   }
 
   const stopVideo = async () => {
@@ -589,26 +583,6 @@ const CallPage = () => {
                 strokeWidth={1.9}
               />
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => void toggleShare()}
-            disabled={
-              (!localVisualActive && !mediaPublished) || pendingAction !== null
-            }
-            className={`grid size-11 place-items-center rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:cursor-not-allowed disabled:opacity-40 sm:size-12 ${
-              mediaPublished
-                ? "bg-emerald-500 text-white hover:bg-emerald-400"
-                : "bg-[#2B2D31] text-white hover:bg-[#35373C]"
-            }`}
-            aria-label={mediaPublished ? "Stop sending media" : "Send media"}
-            title={mediaPublished ? "Stop sending media" : "Send media"}
-          >
-            <RadioTower
-              className={`size-5 ${pendingAction === "share" ? "animate-pulse" : ""}`}
-              strokeWidth={1.9}
-            />
           </button>
 
           <button
