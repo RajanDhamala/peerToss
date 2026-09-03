@@ -20,6 +20,8 @@ export type RtcState = {
   speedTestWaiting: boolean
   callStatus: CallStatus
   callId: string | null
+  peerDisconnectedDialogOpen: boolean
+  peerDisconnectedMessage: string | null
 }
 
 function createInitialState(): RtcState {
@@ -39,6 +41,8 @@ function createInitialState(): RtcState {
     speedTestWaiting: false,
     callStatus: "idle",
     callId: null,
+    peerDisconnectedDialogOpen: false,
+    peerDisconnectedMessage: null,
   }
 }
 

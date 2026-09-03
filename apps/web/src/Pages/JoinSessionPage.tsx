@@ -9,6 +9,7 @@ import {
   WEBSOCKET_URL,
 } from "@/Config/Environment"
 import { rtcSession } from "@/global/rtc/RtcSessionController"
+import { getApiErrorMessage } from "@/Utils/apiError"
 
 type WsMessage = {
   SocketId?: unknown
@@ -35,6 +36,7 @@ function JoinSessionPage() {
 
     const storedSocket = useUserStore.getState().ws
     rtcSession.endSession()
+    rtcSession.setNegotiationRole("participant")
     if (storedSocket && storedSocket.readyState < WebSocket.CLOSING) {
       storedSocket.close()
     }
@@ -65,7 +67,9 @@ function JoinSessionPage() {
         const body = await response.json().catch(() => ({}))
         if (cancelled) return
         if (!response.ok || body.error) {
-          throw new Error(body.error || "Invalid or expired session")
+          throw new Error(
+            getApiErrorMessage(response, body, "Invalid or expired session")
+          )
         }
 
         setJoinState("connecting")
@@ -86,6 +90,8 @@ function JoinSessionPage() {
           socket.id = message.SocketId
           handedOff = true
           cleanupSocketListeners()
+          rtcSession.attachSocket(socket)
+          rtcSession.startPeer()
           setWs(socket)
           toast.success("Connected to the sharing room")
           navigate("/rtc", { replace: true })

@@ -10,7 +10,6 @@ import {
   Gauge,
   Loader2,
   MessageCircle,
-  Radio,
   Upload,
 } from "lucide-react"
 
@@ -36,9 +35,16 @@ import {
   readDroppedTransfer,
 } from "@/Utils/folderArchive"
 
+const CHAT_MESSAGE_MAX_BYTES = 64 * 1024
+const CHAT_MESSAGE_LIMIT_TOAST_ID = "chat-message-payload-limit"
+
+function getMessagePayloadSize(message: string) {
+  return new TextEncoder().encode(message).byteLength
+}
+
 function RtcPage() {
   const ws = useUserStore((state) => state.ws)
-  const status = useRtcStore((state) => state.status)
+  const setWs = useUserStore((state) => state.setWs)
   const peerCreated = useRtcStore((state) => state.peerCreated)
   const chatChannelPresent = useRtcStore(
     (state) => state.chatChannelPresent
@@ -78,6 +84,7 @@ function RtcPage() {
   const { requestFolderUpload, folderUploadPreferenceDialog } =
     useFolderUploadPreference()
 
+  const roomActive = ws?.readyState === WebSocket.OPEN
   const channelOpen = chatReady
   const transferChannelOpen = fileReady
   const directConnectionOpen = channelOpen && transferChannelOpen
@@ -91,7 +98,7 @@ function RtcPage() {
 
   const connectionLabel = directConnectionOpen
     ? "Direct link open"
-    : !ws
+    : !roomActive
       ? "No active room"
       : !peerCreated
         ? "Room ready"
@@ -107,7 +114,27 @@ function RtcPage() {
     activeCount > 0 ||
     speedTestRunning
 
+  const updateDraft = (value: string) => {
+    if (getMessagePayloadSize(value) > CHAT_MESSAGE_MAX_BYTES) {
+      toast.error(
+        `Messages cannot exceed ${formatBytes(CHAT_MESSAGE_MAX_BYTES)}.`,
+        { id: CHAT_MESSAGE_LIMIT_TOAST_ID }
+      )
+      return
+    }
+
+    setDraft(value)
+  }
+
   const sendMessage = () => {
+    if (getMessagePayloadSize(draft.trim()) > CHAT_MESSAGE_MAX_BYTES) {
+      toast.error(
+        `Messages cannot exceed ${formatBytes(CHAT_MESSAGE_MAX_BYTES)}.`,
+        { id: CHAT_MESSAGE_LIMIT_TOAST_ID }
+      )
+      return
+    }
+
     if (rtcSession.sendMessage(draft)) setDraft("")
   }
 
@@ -177,28 +204,43 @@ function RtcPage() {
 
       <div className="ptx-workspace">
         <header className="sticky top-0 z-30 border-b border-[#E4E1DA] bg-[#F5F4F0]/90 backdrop-blur">
-          <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
+          <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
             <Link
               to="/"
+              onClick={() => {
+                rtcSession.endSession()
+                setWs(null)
+              }}
               className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[#4B5160] transition-colors hover:bg-[#EAE7DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
               aria-label="Back to home"
             >
               <ArrowLeft className="size-[18px]" />
             </Link>
 
-            <div className="flex items-center gap-2">
-              <div className="flex size-7 items-center justify-center rounded-md bg-[#14171F]">
-                <Radio className="size-3.5 text-[#F2A33C]" strokeWidth={2} />
-              </div>
-              <span className="ptx-display text-[15px] font-semibold">PeerToss</span>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="relative size-9 shrink-0" aria-hidden="true">
+                <img
+                  src="/peertoss-logo.svg"
+                  alt=""
+                  className="size-9 dark:hidden"
+                />
+                <img
+                  src="/peertoss-logo-dark.svg"
+                  alt=""
+                  className="hidden size-9 dark:block"
+                />
+              </span>
+              <span className="truncate text-base font-semibold tracking-tight">
+                PeerToss
+              </span>
             </div>
 
             <span className="ptx-mono ml-2 hidden rounded-md border border-[#E4E1DA] bg-white px-2 py-1 text-[11px] text-[#8A8776] sm:inline">
-              ROOM {ws ? "ACTIVE" : "OFFLINE"}
+              ROOM {roomActive ? "ACTIVE" : "OFFLINE"}
             </span>
 
 
-            <div className="flex items-center gap-2 rounded-full border border-[#E4E1DA] bg-white py-1 pl-1 pr-2.5 sm:pr-3">
+            <div className="ml-auto flex items-center gap-2 rounded-full border border-[#E4E1DA] bg-white py-1 pl-1 pr-2.5 sm:pr-3">
               <span className="relative flex size-2">
                 {directConnectionOpen && (
                   <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#16947F] opacity-60" />
@@ -206,7 +248,7 @@ function RtcPage() {
                 <span
                   className={`relative inline-flex size-2 rounded-full ${directConnectionOpen
                     ? "bg-[#16947F]"
-                    : ws
+                    : roomActive
                       ? "bg-[#F2A33C]"
                       : "bg-[#8A8776]"
                     }`}
@@ -234,40 +276,6 @@ function RtcPage() {
               {/*     in a permanent server library. */}
               {/*   </p> */}
               {/* </div> */}
-
-              {ws && !directConnectionOpen && (
-                <section className="mb-5 flex flex-col gap-4 rounded-2xl border border-[#E4E1DA] bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-                  <div>
-                    <p className="ptx-display text-sm font-semibold">
-                      Temporary handshake controls
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-[#8A8776]">
-                      {peerCreated
-                        ? `Peer state: ${status}. Send the offer from one device.`
-                        : "Start WebRTC on both devices, then send the offer from one device."}
-                    </p>
-                  </div>
-
-                  <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={() => void rtcSession.startPeer()}
-                      disabled={peerCreated}
-                      className="rounded-xl border border-[#E4E1DA] bg-white px-4 py-2.5 text-sm font-medium text-[#14171F] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] disabled:cursor-default disabled:bg-[#F5F4F0] disabled:text-[#8A8776]"
-                    >
-                      {peerCreated ? "WebRTC started" : "Start WebRTC"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void rtcSession.sendOffer()}
-                      disabled={!peerCreated || chatChannelPresent || fileChannelPresent}
-                      className="rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
-                    >
-                      Send Offer
-                    </button>
-                  </div>
-                </section>
-              )}
 
               <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="grid gap-5 " >
@@ -456,7 +464,7 @@ function RtcPage() {
               draft={draft}
               connected={channelOpen}
               callStatus={callStatus}
-              onDraftChange={setDraft}
+              onDraftChange={updateDraft}
               inputId="peer-message-draft-desktop"
               onSend={() => {
                 void sendMessage()
@@ -502,7 +510,7 @@ function RtcPage() {
         </Dialog>
 
         <Dialog open={mobileChatOpen} onOpenChange={setMobileChatOpen}>
-          <DialogContent className="w-[calc(100%-2rem)] gap-0 overflow-hidden p-0 md:hidden ">
+          <DialogContent className="w-[calc(100%-2rem)] gap-0 overflow-hidden p-0 md:hidden [&>section>header]:pr-16 [&>[data-slot=dialog-close]]:right-3 [&>[data-slot=dialog-close]]:top-3.5 [&>[data-slot=dialog-close]]:flex [&>[data-slot=dialog-close]]:size-9 [&>[data-slot=dialog-close]]:items-center [&>[data-slot=dialog-close]]:justify-center [&>[data-slot=dialog-close]]:rounded-xl [&>[data-slot=dialog-close]]:bg-[#F5F4F0] [&>[data-slot=dialog-close]]:text-[#4B5160] [&>[data-slot=dialog-close]]:opacity-100 [&>[data-slot=dialog-close]]:hover:bg-[#ECE9E1] [&>[data-slot=dialog-close]]:focus-visible:ring-2 [&>[data-slot=dialog-close]]:focus-visible:ring-[#F2A33C]">
             <DialogTitle className="sr-only">Messages</DialogTitle>
             <DialogDescription className="sr-only">
               Messages shared across the direct WebRTC connection.
@@ -512,7 +520,7 @@ function RtcPage() {
               draft={draft}
               connected={channelOpen}
               callStatus={callStatus}
-              onDraftChange={setDraft}
+              onDraftChange={updateDraft}
               inputId="peer-message-draft-mobile"
               onSend={() => {
                 void sendMessage()

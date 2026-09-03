@@ -1,6 +1,8 @@
 import { useEffect } from "react"
 
 import useUserStore from "@/UserStore"
+import { LargeTransferConfirmDialog } from "@/components/rtc/LargeTransferConfirmDialog"
+import { PeerDisconnectedDialog } from "@/components/rtc/PeerDisconnectedDialog"
 import { RtcCallOverlay } from "@/global/rtc/RtcCallOverlay"
 import { rtcSession } from "@/global/rtc/RtcSessionController"
 
@@ -28,7 +30,13 @@ function RtcSessionHost() {
     }
   }, [ws])
 
-  return <RtcCallOverlay />
+  return (
+    <>
+      <RtcCallOverlay />
+      <LargeTransferConfirmDialog />
+      <PeerDisconnectedDialog />
+    </>
+  )
 }
 
 export { RtcSessionHost }

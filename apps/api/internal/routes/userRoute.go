@@ -9,11 +9,13 @@ import (
 )
 
 func UserRouter(app *http.ServeMux, ctrl *controller.Controller) {
-	app.HandleFunc("GET /ws", middleware.Auth(middleware.CheckSession(ctrl.WsHandler)))
+	limitRoomRequests := middleware.NewRoomRequestLimiter()
 
-	app.HandleFunc("GET /createSession", middleware.Auth(ctrl.CreateSession))
+	app.HandleFunc("GET /ws", middleware.Auth(limitRoomRequests(middleware.CheckSession(ctrl.WsHandler))))
 
-	app.HandleFunc("GET /JoinSession/{id}", middleware.Auth(ctrl.JoinSession))
+	app.HandleFunc("GET /createSession", middleware.Auth(limitRoomRequests(ctrl.CreateSession)))
+
+	app.HandleFunc("GET /JoinSession/{id}", middleware.Auth(limitRoomRequests(ctrl.JoinSession)))
 
 	app.HandleFunc("GET /me", middleware.Auth(ctrl.GetMe))
 }

@@ -3,9 +3,16 @@ import { toast } from "react-hot-toast"
 import type { ChatItem } from "@/components/rtc/types"
 import {
   createFolderArchive,
+  LARGE_TRANSFER_WARNING_BYTES,
+  MAX_TRANSFER_BYTES,
+  MAX_TRANSFER_LABEL,
   type FolderSourceFile,
 } from "@/Utils/folderArchive"
 import useUserStore, { type AppWebSocket } from "@/UserStore"
+import {
+  cancelLargeTransferConfirmation,
+  requestLargeTransferConfirmation,
+} from "@/global/rtc/largeTransferConfirmation"
 import useRtcStore, { resetRtcStore } from "@/global/rtc/rtcStore"
 
 const SAFE_FILE_CHUNK_SIZE = 16 * 1024
@@ -19,9 +26,13 @@ const SESSION_CONTROL_PROTOCOL = "peertoss-session-v1"
 const PEER_DISCONNECT_GRACE_MS = 8_000
 const SIGNALING_ERROR_TOAST_THROTTLE_MS = 5_000
 const SIGNALING_ERROR_TOAST_ID = "rtc-signaling-error"
+const INITIAL_OFFER_DELAY_MS = 1_500
+const ICE_RESTART_DELAY_MS = 1_000
+const MAX_ICE_RESTART_ATTEMPTS = 2
+const LARGE_FOLDER_FILE_WARNING_COUNT = 5_000
 
 const ICE_CONFIG: RTCConfiguration = {
-  // Keep the current local-network behavior. Add STUN/TURN here when required.
+  // Localhost/LAN mode: exchange host candidates directly.
   iceServers: [],
 }
 
@@ -92,11 +103,13 @@ type SignalingErrorData = {
   message?: unknown
   msg?: unknown
   error?: unknown
+  phase?: unknown
 }
 
 type RemoteStreamListener = (stream: MediaStream | null) => void
 
 export type LocalVideoSource = "camera" | "screen"
+export type RtcNegotiationRole = "creator" | "participant"
 
 class RtcSessionController {
   private ws: AppWebSocket | null = null
@@ -112,15 +125,38 @@ class RtcSessionController {
   private localVideoSource: LocalVideoSource | null = null
   private remoteStream: MediaStream | null = null
   private remoteStreamListeners = new Set<RemoteStreamListener>()
+  private pendingRemoteIceCandidates: RTCIceCandidateInit[] = []
+  private signalingMessageQueue: Promise<void> = Promise.resolve()
+  private polite = true
+  private makingOffer = false
+  private ignoreOffer = false
+  private isSettingRemoteAnswerPending = false
+  private negotiationPending = false
+  private initialOfferTimer: ReturnType<typeof setTimeout> | null = null
+  private iceRestartTimer: ReturnType<typeof setTimeout> | null = null
+  private iceRestartAttempts = 0
   private peerDisconnectTimer: ReturnType<typeof setTimeout> | null = null
   private peerDisconnectHandled = false
   private lastSignalingErrorToastAt = 0
 
+  setNegotiationRole(role: RtcNegotiationRole) {
+    this.polite = role === "participant"
+  }
+
   attachSocket(socket: AppWebSocket | null) {
     if (this.ws === socket) return
 
+    this.clearInitialOfferTimer()
+    this.clearIceRestartTimer()
     this.detachSocket()
     this.ws = socket
+    this.pendingRemoteIceCandidates = []
+    this.signalingMessageQueue = Promise.resolve()
+    this.makingOffer = false
+    this.ignoreOffer = false
+    this.isSettingRemoteAnswerPending = false
+    this.negotiationPending = false
+    this.iceRestartAttempts = 0
     if (socket) this.lastSignalingErrorToastAt = 0
 
     socket?.addEventListener("message", this.handleSocketMessage)
@@ -129,7 +165,7 @@ class RtcSessionController {
   }
 
   detachSocket(socket?: AppWebSocket | null) {
-    if (!this.ws || (socket && this.ws !== socket)) return
+    if (!this.ws || (socket !== undefined && this.ws !== socket)) return
 
     this.ws.removeEventListener("message", this.handleSocketMessage)
     this.ws.removeEventListener("close", this.handleSocketClose)
@@ -142,7 +178,14 @@ class RtcSessionController {
 
     if (this.pc) this.detachPeer(this.pc)
     this.clearPeerDisconnectTimer()
+    this.clearIceRestartTimer()
     this.peerDisconnectHandled = false
+    this.pendingRemoteIceCandidates = []
+    this.makingOffer = false
+    this.ignoreOffer = false
+    this.isSettingRemoteAnswerPending = false
+    this.negotiationPending = false
+    this.iceRestartAttempts = 0
 
     const peer = new RTCPeerConnection(ICE_CONFIG)
     this.pc = peer
@@ -165,6 +208,27 @@ class RtcSessionController {
     })
 
     return peer
+  }
+
+  scheduleInitialOffer(socket: AppWebSocket) {
+    this.setNegotiationRole("creator")
+    this.attachSocket(socket)
+    const peer = this.startPeer()
+
+    this.clearInitialOfferTimer()
+    useRtcStore.setState({ status: "connecting" })
+
+    this.initialOfferTimer = setTimeout(() => {
+      this.initialOfferTimer = null
+      if (
+        this.ws !== socket ||
+        this.pc !== peer ||
+        socket.readyState !== WebSocket.OPEN
+      ) {
+        return
+      }
+      void this.sendOffer()
+    }, INITIAL_OFFER_DELAY_MS)
   }
 
   setLocalStream(
@@ -401,29 +465,74 @@ class RtcSessionController {
   }
 
   private async createAndSendOffer() {
+    const pc = this.pc
+    const ws = this.ws
+    if (!pc || !ws || ws.readyState !== WebSocket.OPEN) {
+      const error = new Error("WebRTC signaling is not ready")
+      this.reportSignalingError(error, "create-offer")
+      throw error
+    }
+
+    if (this.makingOffer || pc.signalingState !== "stable") {
+      this.negotiationPending = true
+      return
+    }
+
+    this.makingOffer = true
     try {
-      const pc = this.pc
-      const ws = this.ws
-      if (!pc || !ws || ws.readyState !== WebSocket.OPEN) {
-        throw new Error("WebRTC signaling is not ready")
+      const offer = await pc.createOffer()
+      if (
+        this.pc !== pc ||
+        this.ws !== ws ||
+        ws.readyState !== WebSocket.OPEN
+      ) {
+        return
       }
       if (pc.signalingState !== "stable") {
-        throw new Error("WebRTC negotiation is already in progress")
+        this.negotiationPending = true
+        return
       }
-
-      const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
 
       const payload = {
         event: "create-offer",
-        data: offer,
+        data: pc.localDescription,
       }
       console.log("sending offer:", payload)
       ws.send(JSON.stringify(payload))
     } catch (error) {
+      if (
+        this.pc === pc &&
+        this.ws === ws &&
+        this.polite &&
+        pc.signalingState !== "stable"
+      ) {
+        this.negotiationPending = true
+        return
+      }
       this.reportSignalingError(error, "create-offer")
       throw error
+    } finally {
+      this.makingOffer = false
+      this.flushPendingNegotiation()
     }
+  }
+
+  private flushPendingNegotiation() {
+    const pc = this.pc
+    if (
+      !this.negotiationPending ||
+      this.makingOffer ||
+      !pc ||
+      pc.signalingState !== "stable"
+    ) {
+      return
+    }
+
+    this.negotiationPending = false
+    void this.createAndSendOffer().catch(() => {
+      // createAndSendOffer reports actionable signaling failures.
+    })
   }
 
   sendMessage(rawMessage: string) {
@@ -611,6 +720,21 @@ class RtcSessionController {
   }
 
   async sendFile(file: File) {
+    if (file.size > MAX_TRANSFER_BYTES) {
+      toast.error(
+        `Files larger than ${MAX_TRANSFER_LABEL} are not supported.`
+      )
+      return
+    }
+    if (file.size > LARGE_TRANSFER_WARNING_BYTES) {
+      const confirmed = await requestLargeTransferConfirmation({
+        kind: "file",
+        name: file.name,
+        size: file.size,
+      })
+      if (!confirmed) return
+    }
+
     const channel = this.beginFileTransfer()
     if (!channel) return
 
@@ -629,6 +753,29 @@ class RtcSessionController {
     if (files.length === 0) {
       toast.error("Choose a folder with at least one file")
       return
+    }
+
+    const folderBytes = files.reduce(
+      (total, source) =>
+        total + (source instanceof File ? source.size : source.file.size),
+      0
+    )
+    if (folderBytes > MAX_TRANSFER_BYTES) {
+      toast.error(
+        `Folders larger than ${MAX_TRANSFER_LABEL} are not supported.`
+      )
+      return
+    }
+    if (
+      folderBytes > LARGE_TRANSFER_WARNING_BYTES ||
+      files.length > LARGE_FOLDER_FILE_WARNING_COUNT
+    ) {
+      const confirmed = await requestLargeTransferConfirmation({
+        kind: "folder",
+        fileCount: files.length,
+        size: folderBytes,
+      })
+      if (!confirmed) return
     }
 
     const channel = this.beginFileTransfer()
@@ -726,6 +873,9 @@ class RtcSessionController {
     const fileChannel = this.fileChannel
 
     if (notifyPeer) this.sendPeerLeaving()
+    cancelLargeTransferConfirmation()
+    this.clearInitialOfferTimer()
+    this.clearIceRestartTimer()
     this.clearPeerDisconnectTimer()
     this.peerDisconnectHandled = true
 
@@ -748,6 +898,14 @@ class RtcSessionController {
     this.outgoingFile = false
     this.incomingSpeedTest = null
     this.speedTestId = null
+    this.pendingRemoteIceCandidates = []
+    this.signalingMessageQueue = Promise.resolve()
+    this.polite = true
+    this.makingOffer = false
+    this.ignoreOffer = false
+    this.isSettingRemoteAnswerPending = false
+    this.negotiationPending = false
+    this.iceRestartAttempts = 0
 
     this.localStream?.getTracks().forEach((track) => track.stop())
     this.localStream = null
@@ -781,6 +939,57 @@ class RtcSessionController {
     this.peerDisconnectTimer = null
   }
 
+  private clearInitialOfferTimer() {
+    if (this.initialOfferTimer === null) return
+    clearTimeout(this.initialOfferTimer)
+    this.initialOfferTimer = null
+  }
+
+  private clearIceRestartTimer() {
+    if (this.iceRestartTimer === null) return
+    clearTimeout(this.iceRestartTimer)
+    this.iceRestartTimer = null
+  }
+
+  private scheduleIceRestart() {
+    if (this.peerDisconnectHandled || this.iceRestartTimer !== null) return
+
+    const pc = this.pc
+    const ws = this.ws
+    if (
+      !pc ||
+      !ws ||
+      ws.readyState !== WebSocket.OPEN ||
+      this.iceRestartAttempts >= MAX_ICE_RESTART_ATTEMPTS
+    ) {
+      this.handlePeerDisconnected(
+        "The local peer connection could not be restored"
+      )
+      return
+    }
+
+    this.iceRestartAttempts += 1
+    useRtcStore.setState({ status: "reconnecting" })
+    console.warn(
+      `ICE failed; retrying (${this.iceRestartAttempts}/${MAX_ICE_RESTART_ATTEMPTS})`
+    )
+
+    this.iceRestartTimer = setTimeout(() => {
+      this.iceRestartTimer = null
+      if (
+        this.pc !== pc ||
+        this.ws !== ws ||
+        ws.readyState !== WebSocket.OPEN ||
+        pc.connectionState === "closed"
+      ) {
+        return
+      }
+
+      pc.restartIce()
+      void this.sendOffer()
+    }, ICE_RESTART_DELAY_MS)
+  }
+
   private schedulePeerDisconnect() {
     if (this.peerDisconnectHandled || this.peerDisconnectTimer !== null) return
 
@@ -789,16 +998,34 @@ class RtcSessionController {
 
       const connectionState = this.pc?.connectionState
       const iceConnectionState = this.pc?.iceConnectionState
+      const { chatReady, fileReady } = useRtcStore.getState()
       if (
         connectionState === "disconnected" ||
-        iceConnectionState === "disconnected"
+        connectionState === "failed" ||
+        iceConnectionState === "disconnected" ||
+        iceConnectionState === "failed" ||
+        !chatReady ||
+        !fileReady
       ) {
         this.handlePeerDisconnected()
       }
     }, PEER_DISCONNECT_GRACE_MS)
   }
 
-  private handlePeerDisconnected() {
+  private handleTransportFailure() {
+    if (this.peerDisconnectHandled) return
+
+    useRtcStore.setState({ status: "reconnecting" })
+    if (this.polite) {
+      this.schedulePeerDisconnect()
+    } else {
+      this.scheduleIceRestart()
+    }
+  }
+
+  private handlePeerDisconnected(
+    message: string | null = "The other device left the room"
+  ) {
     if (this.peerDisconnectHandled) return
 
     this.peerDisconnectHandled = true
@@ -808,8 +1035,12 @@ class RtcSessionController {
     const userStore = useUserStore.getState()
     if (!socket || userStore.ws === socket) userStore.setWs(null)
 
-    useRtcStore.setState({ status: "disconnected" })
-    toast.error("The other device left the room")
+    useRtcStore.setState({
+      status: "disconnected",
+      peerDisconnectedDialogOpen: true,
+      peerDisconnectedMessage:
+        message ?? "The room connection has ended.",
+    })
   }
 
   private updateMessages(updater: (messages: ChatItem[]) => ChatItem[]) {
@@ -885,7 +1116,7 @@ class RtcSessionController {
     if (this.pc === peer) this.pc = null
   }
 
-  private handleSocketMessage = async (event: MessageEvent) => {
+  private handleSocketMessage = (event: MessageEvent) => {
     if (typeof event.data !== "string") return
 
     let message: { event?: unknown; data?: unknown }
@@ -895,45 +1126,117 @@ class RtcSessionController {
       return
     }
 
+    const socket = event.currentTarget as AppWebSocket | null
+    if (!socket) return
+
+    this.signalingMessageQueue = this.signalingMessageQueue
+      .then(() => this.processSocketMessage(socket, message))
+      .catch((error) => {
+        console.error("Could not process queued WebRTC signaling", error)
+      })
+  }
+
+  private async processSocketMessage(
+    socket: AppWebSocket,
+    message: { event?: unknown; data?: unknown }
+  ) {
+    if (this.ws !== socket) return
+
     if (message.event === "error") {
       const errorMessage = this.getSignalingErrorMessage(
         message.data,
         "The WebRTC handshake failed"
       )
+      const errorPhase =
+        message.data && typeof message.data === "object" &&
+          typeof (message.data as SignalingErrorData).phase === "string"
+          ? (message.data as SignalingErrorData).phase as string
+          : "remote-signaling"
       console.error("Signaling server error:", message.data)
-      this.handleSignalingFailure(errorMessage)
+      this.handleSignalingFailure(errorMessage, errorPhase)
       return
     }
 
     if (message.event === "user-left") {
+      if (this.pc?.connectionState === "connected") return
       this.handlePeerDisconnected()
       return
     }
 
+    if (!this.pc && message.event === "recieve-offer") this.startPeer()
     if (!this.pc) return
     const pc = this.pc
     try {
       if (message.event === "recieve-offer") {
         console.log("got offer:", message.data)
-        await pc.setRemoteDescription(
-          message.data as RTCSessionDescriptionInit
-        )
-        await this.sendAnswer()
+        const description = message.data as RTCSessionDescriptionInit
+        const readyForOffer =
+          !this.makingOffer &&
+          (pc.signalingState === "stable" ||
+            this.isSettingRemoteAnswerPending)
+        const offerCollision = description.type === "offer" && !readyForOffer
+
+        this.ignoreOffer = !this.polite && offerCollision
+        if (this.ignoreOffer) return
+
+        if (offerCollision && pc.signalingState !== "stable") {
+          await pc.setLocalDescription({ type: "rollback" })
+        }
+        await pc.setRemoteDescription(description)
+        if (this.ws !== socket || this.pc !== pc) return
+        await this.flushPendingRemoteIceCandidates(pc)
+        await this.sendAnswer(socket, pc)
+        this.flushPendingNegotiation()
       } else if (message.event === "recieve-answer") {
         console.log("got answer:", message.data)
-        await pc.setRemoteDescription(
-          message.data as RTCSessionDescriptionInit
-        )
+        this.ignoreOffer = false
+        this.isSettingRemoteAnswerPending = true
+        try {
+          await pc.setRemoteDescription(
+            message.data as RTCSessionDescriptionInit
+          )
+        } finally {
+          this.isSettingRemoteAnswerPending = false
+        }
+        if (this.ws !== socket || this.pc !== pc) return
+        await this.flushPendingRemoteIceCandidates(pc)
+        this.flushPendingNegotiation()
       } else if (message.event === "ack-ice-candidate") {
         console.log("got remote ICE:", message.data)
-        await pc.addIceCandidate(message.data as RTCIceCandidateInit)
+        const candidate = message.data as RTCIceCandidateInit
+        if (pc.remoteDescription) {
+          await this.addRemoteIceCandidate(pc, candidate)
+        } else if (!this.ignoreOffer) {
+          this.pendingRemoteIceCandidates.push(candidate)
+        }
       }
     } catch (error) {
+      if (this.ws !== socket || this.pc !== pc) return
       console.error("WebRTC signaling message failed", error)
       this.reportSignalingError(
         error,
         typeof message.event === "string" ? message.event : "unknown"
       )
+    }
+  }
+
+  private async flushPendingRemoteIceCandidates(pc: RTCPeerConnection) {
+    const candidates = this.pendingRemoteIceCandidates.splice(0)
+    for (const candidate of candidates) {
+      await this.addRemoteIceCandidate(pc, candidate)
+    }
+  }
+
+  private async addRemoteIceCandidate(
+    pc: RTCPeerConnection,
+    candidate: RTCIceCandidateInit
+  ) {
+    try {
+      await pc.addIceCandidate(candidate)
+    } catch (error) {
+      if (!this.ignoreOffer) {
+        console.warn("Ignored an unusable remote ICE candidate", error)
+      }
     }
   }
 
@@ -964,19 +1267,9 @@ class RtcSessionController {
     toast.error(errorMessage, { id: SIGNALING_ERROR_TOAST_ID })
   }
 
-  private handleSignalingFailure(errorMessage: string) {
-    const peer = this.pc
-
-    if (peer && peer.connectionState !== "connected") {
-      const socket = this.ws
-      this.endSession({ notifyPeer: false })
-
-      const userStore = useUserStore.getState()
-      if (!socket || userStore.ws === socket) userStore.setWs(null)
-    }
-
+  private handleSignalingFailure(errorMessage: string, phase: string) {
     useRtcStore.setState({ status: "signaling error" })
-    this.showSignalingErrorToast(errorMessage)
+    this.showSignalingErrorToast(`${errorMessage} · ${phase}`)
   }
 
   private reportSignalingError(error: unknown, phase: string) {
@@ -986,29 +1279,32 @@ class RtcSessionController {
     )
     console.error(`WebRTC signaling failed during ${phase}:`, error)
 
-    const ws = this.ws
-    if (ws?.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(
-          JSON.stringify({
-            event: "rtc-error",
-            data: {
-              phase,
-              message: errorMessage,
-            },
-          })
-        )
-      } catch (sendError) {
-        console.error("Could not send the signaling error to the server", sendError)
-      }
-    }
-
-    this.handleSignalingFailure(errorMessage)
+    this.handleSignalingFailure(errorMessage, phase)
   }
 
-  private handleSocketClose = () => {
-    if (this.pc?.connectionState === "connected") return
-    useRtcStore.setState({ status: "signaling closed" })
+  private handleSocketClose = (event: CloseEvent) => {
+    const socket = event.currentTarget as AppWebSocket | null
+    if (socket && this.ws !== socket) return
+
+    const rateLimited =
+      event.code === 1008 && event.reason.includes("rate limit")
+    if (rateLimited) {
+      toast.error("Too many signaling messages. Reconnect and try again.")
+    }
+
+    if (this.pc?.connectionState === "connected") {
+      this.detachSocket(socket)
+      const userStore = useUserStore.getState()
+      if (!socket || userStore.ws === socket) userStore.setWs(null)
+      useRtcStore.setState({ status: "connected" })
+      return
+    }
+
+    this.handlePeerDisconnected(
+      rateLimited
+        ? null
+        : "The room connection closed"
+    )
   }
 
   private handleSocketError = () => {
@@ -1016,33 +1312,52 @@ class RtcSessionController {
     useRtcStore.setState({ status: "signaling error" })
   }
 
-  private sendAnswer = async () => {
-    const pc = this.pc
-    const ws = this.ws
-    if (!pc || !ws || ws.readyState !== WebSocket.OPEN) {
+  private sendAnswer = async (
+    socket: AppWebSocket,
+    pc: RTCPeerConnection
+  ) => {
+    if (
+      this.pc !== pc ||
+      this.ws !== socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
       throw new Error("WebRTC signaling is not ready")
     }
 
     const answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
-    ws.send(
+    if (
+      this.pc !== pc ||
+      this.ws !== socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return
+    }
+    socket.send(
       JSON.stringify({
         event: "create-answer",
-        data: answer,
+        data: pc.localDescription,
       })
     )
     console.log("answer sent")
   }
 
-  private sendIceCandidate = async (ice: RTCIceCandidate) => {
+  private sendIceCandidate(
+    peer: RTCPeerConnection,
+    ice: RTCIceCandidate
+  ) {
     const ws = this.ws
-    try {
-      if (!ws || !this.pc || ws.readyState !== WebSocket.OPEN) {
-        throw new Error("WebRTC signaling is not ready")
-      }
+    if (
+      this.pc !== peer ||
+      !ws ||
+      ws.readyState !== WebSocket.OPEN
+    ) {
+      return
+    }
 
+    try {
       const payload = {
-        event: "send-ice-candiate",
+        event: "send-ice-candidate",
         data: ice,
       }
       console.log("sending Ice-Candidate")
@@ -1053,7 +1368,8 @@ class RtcSessionController {
   }
 
   private handleIceCandidate = (event: RTCPeerConnectionIceEvent) => {
-    if (event.candidate) void this.sendIceCandidate(event.candidate)
+    const peer = event.currentTarget as RTCPeerConnection | null
+    if (event.candidate && peer) this.sendIceCandidate(peer, event.candidate)
   }
 
   private handleIceConnectionStateChange = () => {
@@ -1066,13 +1382,13 @@ class RtcSessionController {
       pc.iceConnectionState === "completed"
     ) {
       this.clearPeerDisconnectTimer()
+      this.clearIceRestartTimer()
+      this.iceRestartAttempts = 0
     } else if (pc.iceConnectionState === "disconnected") {
-      useRtcStore.setState({ status: "disconnected" })
-      this.schedulePeerDisconnect()
-    } else if (
-      pc.iceConnectionState === "failed" ||
-      pc.iceConnectionState === "closed"
-    ) {
+      this.handleTransportFailure()
+    } else if (pc.iceConnectionState === "failed") {
+      this.handleTransportFailure()
+    } else if (pc.iceConnectionState === "closed") {
       this.handlePeerDisconnected()
     }
   }
@@ -1087,9 +1403,13 @@ class RtcSessionController {
 
     if (connectionState === "connected") {
       this.clearPeerDisconnectTimer()
+      this.clearIceRestartTimer()
+      this.iceRestartAttempts = 0
     } else if (connectionState === "disconnected") {
-      this.schedulePeerDisconnect()
-    } else if (connectionState === "failed" || connectionState === "closed") {
+      this.handleTransportFailure()
+    } else if (connectionState === "failed") {
+      this.handleTransportFailure()
+    } else if (connectionState === "closed") {
       this.handlePeerDisconnected()
     }
   }
@@ -1202,13 +1522,19 @@ class RtcSessionController {
     return true
   }
 
-  private handleChatClose = () => {
+  private handleChatClose = (event: Event) => {
     console.log("chat channel is closed")
-    this.handlePeerDisconnected()
+    const channel = event.currentTarget as RTCDataChannel | null
+    if (!channel || this.chatChannel !== channel) return
+
+    this.detachChatChannel(channel)
+    useRtcStore.setState({ chatChannelPresent: false, chatReady: false })
+    this.handleTransportFailure()
   }
 
-  private handleChatError = () => {
-    this.handlePeerDisconnected()
+  private handleChatError = (event: Event) => {
+    console.warn("chat channel failed")
+    this.handleChatClose(event)
   }
 
   private handleFileOpen = () => {
@@ -1221,13 +1547,24 @@ class RtcSessionController {
     this.onFileChannelMessage(event)
   }
 
-  private handleFileClose = () => {
+  private handleFileClose = (event: Event) => {
     console.log("file channel is closed")
-    this.handlePeerDisconnected()
+    const channel = event.currentTarget as RTCDataChannel | null
+    if (!channel || this.fileChannel !== channel) return
+
+    this.detachFileChannel(channel)
+    this.outgoingFile = false
+    useRtcStore.setState({
+      fileChannelPresent: false,
+      fileReady: false,
+      sendingFile: false,
+    })
+    this.handleTransportFailure()
   }
 
-  private handleFileError = () => {
-    this.handlePeerDisconnected()
+  private handleFileError = (event: Event) => {
+    console.warn("file channel failed")
+    this.handleFileClose(event)
   }
 
   private onFileChannelMessage(event: MessageEvent) {
@@ -1246,9 +1583,18 @@ class RtcSessionController {
       }
 
       if (data.type === "file-complete") {
-        this.completeIncomingTransfer(
-          typeof data.id === "string" ? data.id : undefined
-        )
+        const fileId = typeof data.id === "string" ? data.id : undefined
+        const incoming = this.incomingTransfer
+        if (
+          incoming &&
+          (!fileId || incoming.fileId === fileId) &&
+          incoming.receivedBytes !== incoming.size
+        ) {
+          this.failIncomingTransfer(fileId)
+          toast.error("The received file was incomplete.")
+        } else {
+          this.completeIncomingTransfer(fileId)
+        }
         return
       }
 
@@ -1262,6 +1608,25 @@ class RtcSessionController {
       if (data.type && data.type !== "file-start") return
       if (typeof data.name !== "string" || typeof data.size !== "number") return
 
+      const fileId =
+        typeof data.id === "string" ? data.id : crypto.randomUUID()
+      if (
+        !Number.isFinite(data.size) ||
+        data.size < 0 ||
+        data.size > MAX_TRANSFER_BYTES
+      ) {
+        if (this.fileChannel?.readyState === "open") {
+          this.fileChannel.send(JSON.stringify({ type: "file-error", id: fileId }))
+        }
+        toast.error(
+          data.size > MAX_TRANSFER_BYTES
+            ? `The peer tried to send a file larger than the ${MAX_TRANSFER_LABEL} limit.`
+            : "The peer sent invalid file information.",
+          { id: "incoming-file-safety-limit" }
+        )
+        return
+      }
+
       if (this.speedTestId) {
         this.fileChannel?.send(
           JSON.stringify({ type: "file-error", id: data.id })
@@ -1269,8 +1634,6 @@ class RtcSessionController {
         return
       }
 
-      const fileId =
-        typeof data.id === "string" ? data.id : crypto.randomUUID()
       const mime =
         typeof data.mime === "string" && data.mime
           ? data.mime
@@ -1321,8 +1684,23 @@ class RtcSessionController {
     const received = this.incomingTransfer
     if (!received) return
 
+    const nextReceivedBytes = received.receivedBytes + event.data.byteLength
+    if (
+      nextReceivedBytes > received.size ||
+      nextReceivedBytes > MAX_TRANSFER_BYTES
+    ) {
+      if (this.fileChannel?.readyState === "open") {
+        this.fileChannel.send(
+          JSON.stringify({ type: "file-error", id: received.fileId })
+        )
+      }
+      this.failIncomingTransfer(received.fileId)
+      toast.error("The incoming file exceeded its announced size.")
+      return
+    }
+
     received.chunks.push(event.data)
-    received.receivedBytes += event.data.byteLength
+    received.receivedBytes = nextReceivedBytes
 
     const shouldReportProgress =
       received.lastReportedBytes === 0 ||
