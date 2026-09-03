@@ -1,5 +1,3 @@
-import type { AsyncZippable } from "fflate"
-
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: (options?: {
     id?: string
@@ -22,6 +20,10 @@ export type FolderSourceFile = {
 export type DroppedTransfer =
   | { kind: "file"; file: File }
   | { kind: "folder"; files: FolderSourceFile[]; ignoredCount: number }
+
+export const LARGE_TRANSFER_WARNING_BYTES = 128 * 1024 * 1024
+export const MAX_TRANSFER_BYTES = 10 * 1024 * 1024 * 1024
+export const MAX_TRANSFER_LABEL = "10 GB"
 
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".cache",
@@ -86,10 +88,10 @@ function ownedArrayBuffer(bytes: Uint8Array) {
   return copy.buffer
 }
 
-async function zipAsync(entries: AsyncZippable) {
+async function zipAsync(entries: Record<string, Uint8Array<ArrayBuffer>>) {
   const { zip } = await import("fflate")
 
-  return new Promise<Uint8Array>((resolve, reject) => {
+  return new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
     zip(entries, { level: 6 }, (error, data) => {
       if (error) reject(error)
       else resolve(data)
@@ -238,19 +240,31 @@ export async function createFolderArchive(
   if (includedSources.length === 0) {
     throw new Error("The folder does not contain any shareable files")
   }
-  const entries: AsyncZippable = {}
-
-  await Promise.all(
-    includedSources.map(async ({ file, relativePath }) => {
-      const archivePath = normalizedArchivePath(
-        relativePath.includes("/") ? relativePath : `${folderName}/${relativePath}`
-      )
-      entries[archivePath] = new Uint8Array(await file.arrayBuffer())
-    })
+  const sourceBytes = includedSources.reduce(
+    (total, { file }) => total + file.size,
+    0
   )
+  if (sourceBytes > MAX_TRANSFER_BYTES) {
+    throw new Error(
+      `Folders larger than ${MAX_TRANSFER_LABEL} are not supported.`
+    )
+  }
+
+  const entries: Record<string, Uint8Array<ArrayBuffer>> = {}
+  for (const { file, relativePath } of includedSources) {
+    const archivePath = normalizedArchivePath(
+      relativePath.includes("/") ? relativePath : `${folderName}/${relativePath}`
+    )
+    entries[archivePath] = new Uint8Array(await file.arrayBuffer())
+  }
 
   const zipped = await zipAsync(entries)
-  const archive = new File([ownedArrayBuffer(zipped)], `${folderName}.zip`, {
+  if (zipped.byteLength > MAX_TRANSFER_BYTES) {
+    throw new Error(
+      `The prepared folder exceeds the ${MAX_TRANSFER_LABEL} limit.`
+    )
+  }
+  const archive = new File([zipped], `${folderName}.zip`, {
     type: "application/zip",
     lastModified: Date.now(),
   })

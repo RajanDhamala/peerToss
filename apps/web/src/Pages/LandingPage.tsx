@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router"
+import { useLocation, useNavigate } from "react-router"
 import toast from "react-hot-toast"
 import {
   ArrowRight,
@@ -25,6 +25,7 @@ import {
 import { useTheme } from "@/hooks/useTheme"
 import useUserStore, { type AppWebSocket } from "@/UserStore"
 import { rtcSession } from "@/global/rtc/RtcSessionController"
+import { getApiErrorMessage } from "@/Utils/apiError"
 import {
   backendEndpoint,
   WEBSOCKET_URL,
@@ -52,6 +53,9 @@ type WsMessage = {
 
 type SessionRole = "creator" | "participant"
 type ShowcaseCard = "file" | "connection" | "link"
+type LandingNavigationState = {
+  roomAction?: "join" | "create"
+}
 
 type BootstrapSocket = {
   socket: AppWebSocket
@@ -167,15 +171,23 @@ const FLOATING_ASSETS = FLOATING_ASSET_ZONES.map((zone, index) => ({
 
 const LandingPage = () => {
   const navigate = useNavigate()
+  const location = useLocation()
+  const requestedRoomAction = (
+    location.state as LandingNavigationState | null
+  )?.roomAction
   const { theme, toggleTheme } = useTheme()
   const setWs = useUserStore((state) => state.setWs)
 
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(
+    requestedRoomAction === "create"
+  )
   const [closeSessionConfirmOpen, setCloseSessionConfirmOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [session, setSession] = useState<CreatedSession | null>(null)
 
-  const [joinOpen, setJoinOpen] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(
+    requestedRoomAction === "join"
+  )
   const [joinCode, setJoinCode] = useState("")
   const [joining, setJoining] = useState(false)
   const [joinMode, setJoinMode] = useState<"code" | "scan">("code")
@@ -193,6 +205,11 @@ const LandingPage = () => {
   const sessionJoinUrl = session
     ? `${window.location.origin}/join?token=${encodeURIComponent(session.session_id)}`
     : ""
+
+  useEffect(() => {
+    if (!requestedRoomAction) return
+    navigate("/", { replace: true, state: null })
+  }, [navigate, requestedRoomAction])
 
   const respawnFloatingAsset = useCallback((id: string) => {
     setFloatingAssets((currentAssets) =>
@@ -315,6 +332,7 @@ const LandingPage = () => {
     (role: SessionRole, attemptId: number) => {
       if (sessionAttemptRef.current !== attemptId) return
 
+      rtcSession.setNegotiationRole(role)
       const socket = new WebSocket(WEBSOCKET_URL) as AppWebSocket
       let identified = false
       let failureShown = false
@@ -365,6 +383,8 @@ const LandingPage = () => {
         if (typeof message.SocketId === "string") {
           identified = true
           socket.id = message.SocketId
+          rtcSession.attachSocket(socket)
+          rtcSession.startPeer()
           setWs(socket)
 
           if (role === "participant") {
@@ -380,6 +400,7 @@ const LandingPage = () => {
         if (role === "creator" && message.event === "user-joined") {
           cleanupBootstrapListeners()
           toast.success("Your peer joined the room")
+          rtcSession.scheduleInitialOffer(socket)
           navigate("/rtc", { replace: true })
         }
       }
@@ -406,7 +427,9 @@ const LandingPage = () => {
       const body = await response.json().catch(() => ({}))
       if (sessionAttemptRef.current !== attemptId) return
       if (!response.ok || body.error || typeof body.session_id !== "string") {
-        throw new Error(body.error || "Failed to create session")
+        throw new Error(
+          getApiErrorMessage(response, body, "Failed to create session")
+        )
       }
 
       setSession({ session_id: body.session_id })
@@ -414,7 +437,11 @@ const LandingPage = () => {
       setConfirmOpen(false)
     } catch (error) {
       if (sessionAttemptRef.current !== attemptId) return
-      toast.error("Could not create a session. Is the server running?")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not create a session. Is the server running?"
+      )
       console.error(error)
     } finally {
       if (sessionAttemptRef.current === attemptId) setCreating(false)
@@ -442,7 +469,9 @@ const LandingPage = () => {
         const body = await response.json().catch(() => ({}))
         if (sessionAttemptRef.current !== attemptId) return
         if (!response.ok || body.error) {
-          throw new Error(body.error || "Invalid or expired session")
+          throw new Error(
+            getApiErrorMessage(response, body, "Invalid or expired session")
+          )
         }
 
         connectSessionSocket("participant", attemptId)
