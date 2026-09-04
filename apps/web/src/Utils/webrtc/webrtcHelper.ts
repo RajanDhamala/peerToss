@@ -1,7 +1,7 @@
 // Minimal WebRTC setup. Signaling (exchanging offer/answer/ICE over the ws)
 // is handled separately — see the TODOs below.
 
-const ICE_CONFIG: RTCConfiguration = {
+export const ICE_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 }
 

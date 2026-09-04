@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +40,7 @@ func Auth(next http.HandlerFunc) http.HandlerFunc {
 			Name:     "client_id",
 			Value:    NewToken,
 			HttpOnly: true,
-			Secure:   false,
+			Secure:   os.Getenv("COOKIE_SECURE") == "true",
 			SameSite: http.SameSiteLaxMode,
 			Path:     "/",
 			Expires:  time.Now().Add(24 * 3 * time.Hour),
