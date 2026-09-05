@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"http-server/internal/controllers"
@@ -19,18 +21,20 @@ func main() {
 
 	port := os.Getenv("PORT")
 	host := os.Getenv("HOST")
+	domain := strings.TrimSpace(os.Getenv("DOMAIN"))
 
 	ctrl := controller.NewController("test")
 
-	if host == "" || port == "" {
-		panic("no host name env found")
+	if host == "" || port == "" || domain == "" {
+		panic("HOST, PORT, and DOMAIN are required")
 	}
 
 	routes.UserRouter(app, ctrl)
 
-	fmt.Println("server running on port", port)
+	address := net.JoinHostPort(host, port)
+	fmt.Println("server running on", address)
 
-	if err := http.ListenAndServe(":"+port, app); err != nil {
+	if err := http.ListenAndServe(address, app); err != nil {
 		fmt.Println("server error:", err)
 	}
 }

@@ -18,6 +18,7 @@ import {
   QrCode,
   ScanLine,
   Send,
+  Share2,
   Smartphone,
   Sun,
 } from "lucide-react"
@@ -63,6 +64,30 @@ type BootstrapSocket = {
 }
 
 const SHOWCASE_ORDER: ShowcaseCard[] = ["connection", "file", "link"]
+const COPY_THROTTLE_MS = 1_500
+const COPY_FEEDBACK_TOAST_ID = "landing-copy-feedback"
+
+const LazyQrScanner = lazy(() => import("@/components/QrScanner"))
+const LazyQrCode = lazy(() =>
+  import("qrcode.react").then(({ QRCodeSVG }) => ({ default: QRCodeSVG }))
+)
+
+function getSessionTokenFromQr(value: string) {
+  const scannedValue = value.trim()
+
+  try {
+    const url = new URL(scannedValue)
+    const queryToken = url.searchParams.get("token")?.trim()
+    if (queryToken) return queryToken
+
+    const pathToken = url.pathname.match(/\/join\/([^/]+)\/?$/)?.[1]
+    if (pathToken) return decodeURIComponent(pathToken).trim()
+  } catch {
+    // Existing QR codes contain only the raw session code.
+  }
+
+  return scannedValue
+}
 
 const LazyQrScanner = lazy(() => import("@/components/QrScanner"))
 const LazyQrCode = lazy(() =>
@@ -200,6 +225,9 @@ const LandingPage = () => {
   const mobileShowcaseRef = useRef<HTMLDivElement>(null)
   const bootstrapSocketRef = useRef<BootstrapSocket | null>(null)
   const sessionAttemptRef = useRef(0)
+  const lastCopyAtRef = useRef(0)
+  const sharePendingRef = useRef(false)
+
 
   const visibleShowcase = hoveredShowcase ?? selectedShowcase
   const sessionJoinUrl = session
@@ -487,20 +515,48 @@ const LandingPage = () => {
   )
 
   const handleQrDetect = useCallback(
-    (value: string) => {
+    async (value: string) => {
+
       const code = getSessionTokenFromQr(value)
       setJoinCode(code)
-      void handleJoinSession(code)
+      await handleJoinSession(code)
     },
     [handleJoinSession]
   )
 
   const copy = async (text: string, label: string) => {
+    const now = Date.now()
+    if (!text || now - lastCopyAtRef.current < COPY_THROTTLE_MS) return
+    lastCopyAtRef.current = now
+
     try {
       await navigator.clipboard.writeText(text)
-      toast.success(label + " copied")
+      toast.success(label + " copied", { id: COPY_FEEDBACK_TOAST_ID })
     } catch {
-      toast.error("Could not copy")
+      toast.error("Could not copy", { id: COPY_FEEDBACK_TOAST_ID })
+    }
+  }
+
+  const handleShareInvite = async () => {
+    if (!sessionJoinUrl || sharePendingRef.current) return
+    sharePendingRef.current = true
+
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({
+          title: "Join my PeerToss room",
+          text: "Open this link to join my private PeerToss room.",
+          url: sessionJoinUrl,
+        })
+        return
+      }
+
+      await copy(sessionJoinUrl, "Invite link")
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+      await copy(sessionJoinUrl, "Invite link")
+    } finally {
+      sharePendingRef.current = false
     }
   }
 
@@ -975,14 +1031,28 @@ const LandingPage = () => {
               </Suspense>
             </div>
 
-            <button
-              type="button"
-              onClick={() => copy(session?.session_id ?? "", "Pairing code")}
-              className="group flex items-center gap-2 rounded-xl border bg-muted px-4 py-2.5 font-mono text-sm font-medium tracking-[0.18em] transition hover:bg-accent"
-            >
-              {session?.session_id}
-              <Copy className="size-3.5 opacity-50 transition group-hover:opacity-100" />
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => copy(session?.session_id ?? "", "Pairing code")}
+                className="group flex items-center gap-2 rounded-xl border bg-muted px-4 py-2.5 font-mono text-sm font-medium tracking-[0.18em] transition hover:bg-accent"
+              >
+                {session?.session_id}
+                <Copy className="size-3.5 opacity-50 transition group-hover:opacity-100" />
+              </button>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleShareInvite()}
+                className="h-10 rounded-xl px-3"
+                aria-label="Share invitation link"
+                title="Share invitation link"
+              >
+                <Share2 className="size-4" />
+                Share invite
+              </Button>
+            </div>
 
             <p className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="relative flex size-2">

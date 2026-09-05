@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,16 +27,16 @@ const (
 	wsMessageLimit = 64 * 1024
 )
 
-var Domain = os.Getenv("DOMAIN")
+func isAllowedWebSocketOrigin(r *http.Request) bool {
+	origin := strings.TrimRight(strings.TrimSpace(r.Header.Get("Origin")), "/")
+	trustedOrigin := strings.TrimRight(strings.TrimSpace(os.Getenv("DOMAIN")), "/")
+
+	return origin != "" && trustedOrigin != "" && origin == trustedOrigin
+}
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
+	CheckOrigin: isAllowedWebSocketOrigin,
 
-		return origin == Domain ||
-			origin == "http://localhost:5173" ||
-			origin == "http://127.0.0.1:5173"
-	},
 }
 
 type Client struct {
@@ -384,7 +385,7 @@ func (c *Controller) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Name:     "session_token",
 		Value:    newToken,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   os.Getenv("COOKIE_SECURE") == "true",
 		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 		Expires:  time.Now().Add(60 * time.Second),
@@ -424,7 +425,7 @@ func (c *Controller) JoinSession(w http.ResponseWriter, r *http.Request) {
 		Name:     "session_token",
 		Value:    newToken,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   os.Getenv("COOKIE_SECURE") == "true",
 		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 		Expires:  time.Now().Add(60 * time.Second),
