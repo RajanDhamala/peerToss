@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +42,7 @@ func Auth(next http.HandlerFunc) http.HandlerFunc {
 			Value:    NewToken,
 			HttpOnly: true,
 			Secure:   os.Getenv("COOKIE_SECURE") == "true",
+
 			SameSite: http.SameSiteLaxMode,
 			Path:     "/",
 			Expires:  time.Now().Add(24 * 3 * time.Hour),

@@ -36,6 +36,7 @@ func isAllowedWebSocketOrigin(r *http.Request) bool {
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: isAllowedWebSocketOrigin,
+
 }
 
 type Client struct {
@@ -152,7 +153,7 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 			case <-ticker.C:
 				conn.SetWriteDeadline(time.Now().Add(writeWait))
-				fmt.Println("PING")
+
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					client.Close()
 					return
@@ -170,7 +171,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Every pong proves the client is still alive.
 	conn.SetPongHandler(func(string) error {
-		fmt.Println("PONG")
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 	// cleanup

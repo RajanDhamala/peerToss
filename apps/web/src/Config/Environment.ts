@@ -23,6 +23,7 @@ export function backendEndpoint(path: string) {
   return `${BACKEND_BASE_URL}/${path.replace(/^\/+/, "")}`
 }
 
+
 const WEBSOCKET_ENDPOINT = requireEnvironmentValue(
   "VITE_WS_URL",
   import.meta.env.VITE_WS_URL
@@ -39,6 +40,7 @@ function createWebSocketUrl() {
     throw new Error("VITE_WS_URL must use HTTP, HTTPS, WS, or WSS")
   }
 
+
   if (
     IS_PRODUCTION &&
     window.location.protocol === "https:" &&
@@ -46,6 +48,7 @@ function createWebSocketUrl() {
   ) {
     throw new Error("VITE_WS_URL must use WSS in production")
   }
+
 
   return url.toString()
 }

@@ -89,6 +89,28 @@ function getSessionTokenFromQr(value: string) {
   return scannedValue
 }
 
+const LazyQrScanner = lazy(() => import("@/components/QrScanner"))
+const LazyQrCode = lazy(() =>
+  import("qrcode.react").then(({ QRCodeSVG }) => ({ default: QRCodeSVG }))
+)
+
+function getSessionTokenFromQr(value: string) {
+  const scannedValue = value.trim()
+
+  try {
+    const url = new URL(scannedValue)
+    const queryToken = url.searchParams.get("token")?.trim()
+    if (queryToken) return queryToken
+
+    const pathToken = url.pathname.match(/\/join\/([^/]+)\/?$/)?.[1]
+    if (pathToken) return decodeURIComponent(pathToken).trim()
+  } catch {
+    // Existing QR codes contain only the raw session code.
+  }
+
+  return scannedValue
+}
+
 const FAQ_ITEMS = [
   {
     question: "How does a private room work?",
@@ -205,6 +227,7 @@ const LandingPage = () => {
   const sessionAttemptRef = useRef(0)
   const lastCopyAtRef = useRef(0)
   const sharePendingRef = useRef(false)
+
 
   const visibleShowcase = hoveredShowcase ?? selectedShowcase
   const sessionJoinUrl = session
@@ -493,6 +516,7 @@ const LandingPage = () => {
 
   const handleQrDetect = useCallback(
     async (value: string) => {
+
       const code = getSessionTokenFromQr(value)
       setJoinCode(code)
       await handleJoinSession(code)
