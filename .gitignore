@@ -29,4 +29,5 @@ chrome-user-data
 
 .env*
 
+.deploy.env
 

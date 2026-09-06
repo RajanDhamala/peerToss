@@ -31,7 +31,8 @@ type sessionClaims struct {
 	jwt.RegisteredClaims
 }
 
-func CreateUserToken(id string) (string, tokenClaims, error) {
+
+func CreateUserToken(id string) (string, *UserJWT, error) {
 	claims := tokenClaims{
 		ID: id,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -42,10 +43,12 @@ func CreateUserToken(id string) (string, tokenClaims, error) {
 
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(os.Getenv("JWT_TOKEN")))
 	if err != nil {
-		return "", tokenClaims{}, err
+		return "", &UserJWT{}, err
 	}
+	data := UserJWT{ID: claims.ID}
 
-	return token, claims, nil
+	return token, &data, nil
+
 }
 
 func CreateSessionToken(id string, userId string, role string) (string, error) {

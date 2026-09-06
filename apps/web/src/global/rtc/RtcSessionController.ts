@@ -8,6 +8,8 @@ import {
   MAX_TRANSFER_LABEL,
   type FolderSourceFile,
 } from "@/Utils/folderArchive"
+
+import { ICE_CONFIG } from "@/Utils/webrtc/webrtcHelper"
 import useUserStore, { type AppWebSocket } from "@/UserStore"
 import {
   cancelLargeTransferConfirmation,
@@ -31,10 +33,6 @@ const ICE_RESTART_DELAY_MS = 1_000
 const MAX_ICE_RESTART_ATTEMPTS = 2
 const LARGE_FOLDER_FILE_WARNING_COUNT = 5_000
 
-const ICE_CONFIG: RTCConfiguration = {
-  // Localhost/LAN mode: exchange host candidates directly.
-  iceServers: [],
-}
 
 type IncomingTransfer = {
   fileId: string
@@ -266,11 +264,11 @@ class RtcSessionController {
     const nextTracks = nextStream.getTracks()
     const retainedStream = previousStream ?? nextStream
     const publishedSenders = pc
-      ? pc
-          .getSenders()
-          .filter(
-            (sender) => sender.track && previousTracks.has(sender.track)
-          )
+      ? pc.getSenders()
+        .filter(
+          (sender) => sender.track && previousTracks.has(sender.track)
+        )
+
       : []
     const wasPublished = publishedSenders.length > 0
     let negotiationRequired = false

@@ -6,17 +6,24 @@ import { CameraOff, ScanLine } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 type QrScannerProps = {
-  onDetect: (value: string) => void
+  onDetect: (value: string) => void | Promise<void>
 }
 
 type CameraState = "starting" | "live" | "denied" | "unsupported" | "stopped"
+
+const SCAN_FRAME_SIZE = 480
+const SCAN_INTERVAL_MS = 160
+const DETECTION_RETRY_MS = 1_500
+const SCAN_REGION_RATIO = 0.82
 
 const QrScanner = ({ onDetect }: QrScannerProps) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef(0)
-  const detectedRef = useRef(false)
+  const retryTimerRef = useRef(0)
+  const processingRef = useRef(false)
+  const lastScanAtRef = useRef(0)
 
   const supported =
     typeof navigator.mediaDevices?.getUserMedia === "function"
@@ -29,41 +36,110 @@ const QrScanner = ({ onDetect }: QrScannerProps) => {
     if (!supported) return
 
     let cancelled = false
+    let detectorStarted = false
 
-    const scanLoop = () => {
+    const decodeFrame = (
+      video: HTMLVideoElement,
+      canvas: HTMLCanvasElement
+    ) => {
+      const videoWidth = video.videoWidth
+      const videoHeight = video.videoHeight
+      if (!videoWidth || !videoHeight) return null
+
+      if (
+        canvas.width !== SCAN_FRAME_SIZE ||
+        canvas.height !== SCAN_FRAME_SIZE
+      ) {
+        canvas.width = SCAN_FRAME_SIZE
+        canvas.height = SCAN_FRAME_SIZE
+      }
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })
+      if (!ctx) return null
+
+      const sourceSize = Math.min(videoWidth, videoHeight) * SCAN_REGION_RATIO
+      const sourceX = (videoWidth - sourceSize) / 2
+      const sourceY = (videoHeight - sourceSize) / 2
+
+      const decode = (mirrored: boolean) => {
+        ctx.save()
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, SCAN_FRAME_SIZE, SCAN_FRAME_SIZE)
+        if (mirrored) {
+          ctx.translate(SCAN_FRAME_SIZE, 0)
+          ctx.scale(-1, 1)
+        }
+        ctx.drawImage(
+          video,
+          sourceX,
+          sourceY,
+          sourceSize,
+          sourceSize,
+          0,
+          0,
+          SCAN_FRAME_SIZE,
+          SCAN_FRAME_SIZE
+        )
+        ctx.restore()
+
+        const image = ctx.getImageData(
+          0,
+          0,
+          SCAN_FRAME_SIZE,
+          SCAN_FRAME_SIZE
+        )
+        return jsQR(image.data, image.width, image.height, {
+          inversionAttempts: "attemptBoth",
+        })
+      }
+
+      return decode(false) ?? decode(true)
+    }
+
+    const scanLoop = (timestamp: number) => {
+      if (cancelled) return
+
       const video = videoRef.current
       const canvas = canvasRef.current
-      if (detectedRef.current || !video || !canvas) return
+      if (!video || !canvas) return
 
-      if (video.readyState < video.HAVE_ENOUGH_DATA) {
+      if (
+        processingRef.current ||
+        video.readyState < video.HAVE_CURRENT_DATA ||
+        timestamp - lastScanAtRef.current < SCAN_INTERVAL_MS
+      ) {
         rafRef.current = requestAnimationFrame(scanLoop)
         return
       }
 
-      if (canvas.width !== video.videoWidth) {
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-      }
-      const ctx = canvas.getContext("2d", { willReadFrequently: true })
-      if (!ctx) return
-
-      ctx.drawImage(video, 0, 0)
-      const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      // attemptBoth (the default): webcam shots of a screen often come
-      // through color-inverted and only decode with inversion.
-      const code = jsQR(image.data, image.width, image.height)
+      lastScanAtRef.current = timestamp
+      const code = decodeFrame(video, canvas)
 
       if (code?.data) {
-        detectedRef.current = true
-        toast.success("QR code detected", { icon: <ScanLine className="size-4" /> })
-        onDetect(code.data)
+        processingRef.current = true
+        toast.success("QR code detected", {
+          id: "qr-code-detected",
+          icon: <ScanLine className="size-4" />,
+        })
+
+        void Promise.resolve(onDetect(code.data)).finally(() => {
+          if (cancelled) return
+          retryTimerRef.current = window.setTimeout(() => {
+            if (cancelled) return
+            processingRef.current = false
+            lastScanAtRef.current = 0
+            rafRef.current = requestAnimationFrame(scanLoop)
+          }, DETECTION_RETRY_MS)
+        })
         return
       }
+
       rafRef.current = requestAnimationFrame(scanLoop)
     }
 
     const startDetector = () => {
-      if (cancelled) return
+      if (cancelled || detectorStarted) return
+      detectorStarted = true
       setCameraState("live")
       rafRef.current = requestAnimationFrame(scanLoop)
     }
@@ -71,7 +147,7 @@ const QrScanner = ({ onDetect }: QrScannerProps) => {
     navigator.mediaDevices
       .getUserMedia({
         video: {
-          facingMode: "environment",
+          facingMode: { ideal: "environment" },
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
@@ -109,6 +185,7 @@ const QrScanner = ({ onDetect }: QrScannerProps) => {
     return () => {
       cancelled = true
       cancelAnimationFrame(rafRef.current)
+      clearTimeout(retryTimerRef.current)
       streamRef.current?.getTracks().forEach((t) => t.stop())
       streamRef.current = null
     }
@@ -116,6 +193,7 @@ const QrScanner = ({ onDetect }: QrScannerProps) => {
 
   const stopCamera = () => {
     cancelAnimationFrame(rafRef.current)
+    clearTimeout(retryTimerRef.current)
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setCameraState("stopped")
