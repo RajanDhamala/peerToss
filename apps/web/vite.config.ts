@@ -8,7 +8,9 @@ export default defineConfig(({ command, mode }) => {
   const environment = loadEnv(mode, process.cwd(), "")
   const appEnvironment = environment.VITE_ENVIRONMENT?.trim()
   const backendPath = environment.VITE_BACKEND?.trim().replace(/\/+$/, "")
+
   const webSocketUrl = environment.VITE_WS_URL?.trim()
+
   const devProxyTarget = environment.DEV_PROXY_TARGET?.trim()
 
   if (!appEnvironment) throw new Error("VITE_ENVIRONMENT is required")
