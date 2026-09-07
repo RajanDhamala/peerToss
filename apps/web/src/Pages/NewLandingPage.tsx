@@ -1,13 +1,24 @@
-
 import {
-  lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode,
-  type PointerEvent as ReactPointerEvent
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
 } from "react"
 import { useLocation, useNavigate } from "react-router"
 import toast from "react-hot-toast"
 import {
-  ArrowRight, ArrowUpRight, Check, ChevronDown, Copy, FileText, FolderUp, Laptop,
-  Link2, Loader2, MessageSquare, Mic, MonitorUp, PhoneOff, QrCode, ScanLine, Share2, ShieldCheck, Smartphone, Upload, Video,
+  ArrowRight,
+  ChevronDown,
+  Copy,
+  Loader2,
+  QrCode,
+  ScanLine,
+  Share2,
 } from "lucide-react"
 
 import useUserStore, { type AppWebSocket } from "@/UserStore"
@@ -19,13 +30,14 @@ import {
 } from "@/Config/Environment"
 import { Button } from "@/components/ui/button"
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { TransferRow } from "@/components/rtc/TransferRow"
-import { StatusPill } from "@/components/rtc/StatusPill"
-import { FileTypeIcon } from "@/components/rtc/FileTypeIcon"
-import type { ChatItem } from "@/components/rtc/types"
 
 type CreatedSession = {
   session_id: string
@@ -55,379 +67,6 @@ const LazyQrCode = lazy(() =>
   import("qrcode.react").then(({ QRCodeSVG }) => ({ default: QRCodeSVG }))
 )
 
-const HOW_IT_WORKS_STEPS = [
-  {
-    title: "Create a room",
-    description: "Open a temporary room. Your QR code and pairing code are ready to share.",
-  },
-  {
-    title: "Pair the other device",
-    description: "Scan the QR code or enter the code on another phone, tablet, or laptop.",
-  },
-  {
-    title: "Toss it over",
-    description: "Send a file, drop a link, or start a call. You’re connected and ready to go.",
-  },
-] as const
-
-function FeatureEyebrow({ children }: { children: string }) {
-  return (
-    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#686868] sm:text-xs">
-      {children}
-    </p>
-  )
-}
-
-function PreviewWindow({
-  title,
-  children,
-  footer,
-}: {
-  title: string
-  children: ReactNode
-  footer: ReactNode
-}) {
-  return (
-    <div className="w-full min-w-0 overflow-hidden rounded-[22px] border border-[#dedee0] bg-white shadow-[0_24px_70px_-20px_rgba(20,20,25,0.22)] sm:rounded-[26px]">
-      <div className="grid h-11 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-[#e5e5e5] bg-[#fafafa] px-4 text-[11px] sm:px-5 sm:text-xs">
-        <div className="flex gap-1.5" aria-hidden="true">
-          <span className="size-2.5 rounded-full bg-[#ff5f57]" />
-          <span className="size-2.5 rounded-full bg-[#febc2e]" />
-          <span className="size-2.5 rounded-full bg-[#28c840]" />
-        </div>
-        <span className="font-medium text-[#333333]">{title}</span>
-        <span className="justify-self-end text-[10px] text-[#777777]">Preview</span>
-      </div>
-      {children}
-      <div className="flex min-h-10 items-center justify-center gap-2 border-t border-[#e8e8e8] bg-[#fafafa] px-4 py-2 text-[11px] text-[#777777]">
-        <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
-        {footer}
-      </div>
-    </div>
-  )
-}
-
-// Shared by the showcase and the real invite dialog. Preview actions open
-// room creation; sample codes are never copied or sent to the session API.
-function RoomInviteContent({
-  code,
-  url,
-  onCopy,
-  onShare,
-  preview = false,
-}: {
-  code: string
-  url: string
-  onCopy: () => void
-  onShare: () => void
-  preview?: boolean
-}) {
-  const qrSize = preview ? 160 : 184
-
-  return (
-    <div className={`flex flex-col items-center py-1 ${preview ? "gap-4" : "gap-5"}`}>
-      <div className={`rounded-2xl border border-[#e5e5e5] bg-white shadow-[0_8px_24px_-12px_rgba(0,0,0,0.18)] ${preview ? "p-3" : "p-4"}`}>
-        <Suspense
-          fallback={
-            <div className="grid place-items-center" style={{ width: qrSize, height: qrSize }} aria-label="Loading QR code">
-              <Loader2 className="size-5 animate-spin text-slate-400 motion-reduce:animate-none" />
-            </div>
-          }
-        >
-          <LazyQrCode
-            value={url}
-            size={qrSize}
-            title={preview ? "Example QR code linking to this preview" : "Scan to join this room"}
-          />
-        </Suspense>
-      </div>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <button
-          type="button"
-          onClick={onCopy}
-          aria-label={preview ? "Create a room to get a pairing code" : "Copy pairing code"}
-          className="group flex min-h-10 items-center gap-2 rounded-xl border border-[#e5e5e5] bg-[#fafafa] px-4 py-2.5 font-mono text-sm font-medium tracking-[0.18em] text-[#222222] transition hover:bg-[#f0f0f0] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 motion-reduce:transition-none"
-        >
-          {code}
-          <Copy className="size-3.5 opacity-50 group-hover:opacity-100" aria-hidden="true" />
-        </button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onShare}
-          className="h-10 rounded-xl border-[#e5e5e5] bg-white px-3 text-[#222222] shadow-none hover:bg-[#fafafa]"
-          aria-label={preview ? "Create a room to share an invite" : "Share invitation link"}
-        >
-          <Share2 className="size-4" />
-          Share invite
-        </Button>
-      </div>
-      <p className="flex items-center gap-2 text-xs text-[#777777]">
-        <span className="relative flex size-2" aria-hidden="true">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-400 opacity-60 motion-reduce:animate-none" />
-          <span className="relative inline-flex size-2 rounded-full bg-amber-500" />
-        </span>
-        Waiting for the other device…
-      </p>
-    </div>
-  )
-}
-
-function HowItWorksTimeline({ onCreateRoom }: { onCreateRoom: () => void }) {
-  return (
-    <section id="how-it-works" aria-labelledby="how-timeline-title" className="scroll-mt-8 border-b border-[#e8e8e8] bg-[#fcfcfc]">
-      <div className="mx-auto grid max-w-[1280px] items-center gap-12 px-5 py-16 sm:gap-14 sm:px-8 sm:py-24 lg:grid-cols-[0.9fr_1.1fr] lg:gap-20 lg:px-12 lg:py-28">
-        <div className="max-w-[460px]">
-          <FeatureEyebrow>A little setup. A lot to share.</FeatureEyebrow>
-          <h2 id="how-timeline-title" className="mt-5 text-[clamp(2.25rem,3.5vw,3rem)] font-semibold leading-[1.08] tracking-[-0.05em]">
-            Two devices.<br />Three simple steps.
-          </h2>
-          <ol className="mt-8 space-y-6 sm:mt-9 sm:space-y-7">
-            {HOW_IT_WORKS_STEPS.map((step, index) => (
-              <li key={step.title} className="relative flex gap-4">
-                {index < HOW_IT_WORKS_STEPS.length - 1 && (
-                  <span aria-hidden="true" className="absolute bottom-[-28px] left-[14px] top-8 w-px bg-[#e1e1e4]" />
-                )}
-                <span aria-hidden="true" className="relative mt-0.5 grid size-[29px] shrink-0 place-items-center rounded-full border border-[#dedee2] bg-white font-mono text-[11px] text-[#777777]">
-                  {index + 1}
-                </span>
-                <div>
-                  <h3 className="text-[15px] font-semibold">{step.title}</h3>
-                  <p className="mt-1.5 text-sm leading-[1.8] text-[#646464]">{step.description}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-          <Button onClick={onCreateRoom} className="mt-8 h-11 rounded-lg bg-[#111111] px-5 text-sm font-medium text-white shadow-none hover:bg-[#303030]">
-            Create a free room
-            <ArrowUpRight className="size-4" />
-          </Button>
-        </div>
-        <div className="mx-auto w-full max-w-[440px] min-w-0">
-          <PreviewWindow title="Your private room" footer="No account. Just your two devices.">
-            <div className="px-4 py-6 sm:px-6 sm:py-7">
-              <h3 className="text-center text-lg font-semibold tracking-[-0.025em]">Invite your other device</h3>
-              <p className="mx-auto mb-5 mt-2 max-w-[270px] text-center text-xs leading-5 text-[#777777]">
-                One scan or one code. That’s all it takes to get connected.
-              </p>
-              <RoomInviteContent
-                code="SC28ZV"
-                url={`${window.location.origin}/#how-it-works`}
-                onCopy={onCreateRoom}
-                onShare={onCreateRoom}
-                preview
-              />
-            </div>
-          </PreviewWindow>
-          <div className="mt-5 flex items-center justify-center gap-3 text-[11px] text-[#777777]" aria-hidden="true">
-            <span className="flex items-center gap-2"><Laptop className="size-4" />Your laptop</span>
-            <span className="w-10 border-t border-dashed border-[#cccccc]" />
-            <span className="flex items-center gap-2"><Smartphone className="size-4" />Your phone</span>
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-// Sample data stays in the showcase and never enters the RTC store.
-const PREVIEW_TRANSFERS: ChatItem[] = [
-  {
-    id: "preview-photos",
-    kind: "file",
-    mine: true,
-    ts: 0,
-    name: "Weekend photos.zip",
-    size: 25 * 1024 * 1024,
-    transferredBytes: 18 * 1024 * 1024,
-    transferStatus: "sending",
-  },
-  {
-    id: "preview-notes",
-    kind: "file",
-    mine: true,
-    ts: new Date(2026, 0, 1, 10, 42).getTime(),
-    name: "Trip itinerary.pdf",
-    size: 2.4 * 1024 * 1024,
-    transferStatus: "complete",
-  },
-]
-
-function FileSharingFeature({ onCreateRoom }: { onCreateRoom: () => void }) {
-  return (
-    <section aria-labelledby="sharing-title" className="border-b border-[#e8e8e8] bg-[#f8f8f8]">
-      <div className="mx-auto grid max-w-[1280px] items-center gap-12 px-5 py-16 sm:gap-14 sm:px-8 sm:py-24 lg:grid-cols-[1.15fr_0.85fr] lg:gap-16 lg:px-12 lg:py-28 xl:gap-20">
-        <div className="max-w-[460px] lg:col-start-2 lg:row-start-1">
-          <FeatureEyebrow>Your files. A shorter journey.</FeatureEyebrow>
-          <h2 id="sharing-title" className="mt-5 text-[clamp(2.25rem,3.5vw,3rem)] font-semibold leading-[1.08] tracking-[-0.05em]">
-            From this device.<br />To that one.
-          </h2>
-          <p className="mt-6 text-base leading-[1.85] text-[#606060] sm:text-[17px]">
-            The whole folder. The original photo. That PDF you need on your phone.
-            Send them straight to the other device, right from your browser.
-          </p>
-          <ul className="mt-7 space-y-4 text-sm">
-            <li className="flex items-center gap-3"><FolderUp className="size-4 shrink-0 text-violet-500" />Files and entire folders, in one place</li>
-            <li className="flex items-center gap-3"><Link2 className="size-4 shrink-0" />Links and quick notes in the same room</li>
-            <li className="flex items-center gap-3"><ShieldCheck className="size-4 shrink-0" />Files travel between your paired devices</li>
-          </ul>
-        </div>
-        <div className="mx-auto w-full max-w-[620px] min-w-0 lg:col-start-1 lg:row-start-1">
-          <PreviewWindow title="Files & messages" footer="Shared over your private connection">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#ededed] px-4 py-3 sm:px-6">
-              <span className="flex items-center gap-2 text-xs font-medium">
-                <Laptop className="size-4 text-[#777777]" />You
-                <ArrowRight className="size-3 text-[#bbbbbb]" />
-                <Smartphone className="size-4 text-[#777777]" />Peer
-              </span>
-              <StatusPill label="Connected" state="on" />
-            </div>
-            <div className="p-4 sm:px-6 sm:py-5">
-              <button
-                type="button"
-                onClick={onCreateRoom}
-                aria-label="Create a room to share files"
-                className="group flex w-full flex-col items-center rounded-xl border border-dashed border-[#d5d5da] bg-[#fafafa] px-4 py-5 transition-colors hover:border-violet-400 hover:bg-violet-50/40 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 sm:py-6 motion-reduce:transition-none"
-              >
-                <span className="mb-3 flex items-end -space-x-1.5" aria-hidden="true">
-                  <FileTypeIcon name="photo.png" className="size-10 -rotate-12" />
-                  <FileTypeIcon name="folder.zip" className="relative z-10 size-12" />
-                  <FileTypeIcon name="notes.pdf" className="size-10 rotate-12" />
-                </span>
-                <span className="text-sm font-medium">A little drop. A big handoff.</span>
-                <span className="mt-1.5 text-xs text-[#777777]">Files, photos, and folders welcome.</span>
-                <span className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[#e1e1e1] bg-white px-3 py-2 text-xs shadow-xs">
-                  <Upload className="size-3.5" />Share a file
-                </span>
-              </button>
-              <div className="mb-3 mt-5 flex items-center justify-between text-[11px] text-[#777777]">
-                <span className="font-medium">In this room</span><span>2 files</span>
-              </div>
-              <div className="space-y-2.5 [&_[data-slot=badge]]:hidden [&_button:disabled]:hidden sm:[&_[data-slot=badge]]:inline-flex sm:[&_button:disabled]:inline-flex">
-                {PREVIEW_TRANSFERS.map((item) => <TransferRow key={item.id} item={item} estimatedMbps={null} />)}
-              </div>
-            </div>
-          </PreviewWindow>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function CallFeature() {
-  const [screenPreview, setScreenPreview] = useState(false)
-
-  return (
-    <section aria-labelledby="calling-title" className="border-b border-[#e8e8e8] bg-[#fcfcfc]">
-      <div className="mx-auto grid max-w-[1280px] items-center gap-12 px-5 py-16 sm:gap-14 sm:px-8 sm:py-24 lg:grid-cols-[0.9fr_1.1fr] lg:gap-20 lg:px-12 lg:py-28">
-        <div className="max-w-[460px]">
-          <FeatureEyebrow>More than a file handoff</FeatureEyebrow>
-          <h2 id="calling-title" className="mt-5 text-[clamp(2.25rem,3.5vw,3rem)] font-semibold leading-[1.08] tracking-[-0.05em]">
-            Send it over.<br />Talk it through.
-          </h2>
-          <p className="mt-6 text-base leading-[1.85] text-[#606060] sm:text-[17px]">
-            Sometimes a file needs a little context. Start a call, share your
-            screen, and keep the conversation going in the room you already opened.
-          </p>
-          <ul className="mt-7 space-y-4 text-sm">
-            <li className="flex items-center gap-3"><Video className="size-4 shrink-0 text-violet-500" />Video and audio calls, right in your browser</li>
-            <li className="flex items-center gap-3"><MonitorUp className="size-4 shrink-0" />Share your screen to show what you mean</li>
-            <li className="flex items-center gap-3"><MessageSquare className="size-4 shrink-0" />Keep sending files and messages during a call</li>
-          </ul>
-        </div>
-        <div className="mx-auto w-full max-w-[580px] min-w-0">
-          <PreviewWindow title="PeerToss Call" footer="One room for the whole conversation">
-            <div className="relative h-[340px] overflow-hidden bg-[#202225] text-white sm:h-[380px]">
-              {screenPreview ? (
-                <div className="absolute inset-x-5 bottom-20 top-14 flex items-center justify-center sm:inset-x-8">
-                  <div className="w-full max-w-[330px] overflow-hidden rounded-xl border border-white/10 bg-[#f8f8f8] text-[#222222] shadow-2xl">
-                    <div className="flex items-center gap-2 border-b border-[#e5e5e5] px-4 py-2.5 text-[10px] text-[#777777]">
-                      <FileText className="size-3" />Trip itinerary.pdf
-                    </div>
-                    <div className="p-5">
-                      <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#777777]">A weekend away</p>
-                      <p className="mt-2 text-xl font-semibold tracking-[-0.04em]">A little plan.<br />A great escape.</p>
-                      <div className="mt-4 space-y-2 text-[11px]">
-                        <p className="flex items-center gap-2"><Check className="size-3 text-emerald-600" />Pick a place</p>
-                        <p className="flex items-center gap-2"><Check className="size-3 text-emerald-600" />Share the itinerary</p>
-                        <p className="flex items-center gap-2"><span className="size-3 rounded-sm border border-[#cccccc]" />Pack the essentials</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <img
-                  src="/call-preview/peer.webp"
-                  alt="A smiling participant in the video call preview"
-                  width={960}
-                  height={720}
-                  loading="lazy"
-                  decoding="async"
-                  className="absolute inset-0 size-full object-cover object-[45%_38%]"
-                />
-              )}
-              <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/55" />
-              <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 py-4 text-[11px] sm:px-5">
-                <span className="flex items-center gap-2 rounded-full border border-white/10 bg-black/25 px-2.5 py-1.5 backdrop-blur-md">
-                  <span className="size-1.5 rounded-full bg-emerald-400" />
-                  {screenPreview ? "Sharing a screen" : "In a call"}
-                </span>
-                <span className="rounded-full bg-black/20 px-2.5 py-1.5 font-mono text-white/85 backdrop-blur-md">02:34</span>
-              </div>
-              {!screenPreview && (
-                <span className="absolute bottom-24 left-4 inline-flex items-center gap-2 rounded-lg bg-black/25 px-2.5 py-1.5 text-[11px] backdrop-blur-md sm:left-5">
-                  <Mic className="size-3" />Your peer
-                </span>
-              )}
-              <div className="absolute bottom-23 right-3 aspect-[4/3] w-24 overflow-hidden rounded-xl border-2 border-white/70 bg-[#303237] shadow-[0_6px_24px_rgba(0,0,0,0.25)] sm:right-5 sm:w-32">
-                <img
-                  src="/call-preview/self.webp"
-                  alt="The second participant shown in the self-view preview"
-                  width={480}
-                  height={360}
-                  loading="lazy"
-                  decoding="async"
-                  className="size-full object-cover"
-                />
-                <span className="absolute bottom-1.5 left-1.5 rounded-md bg-black/40 px-1.5 py-0.5 text-[9px] backdrop-blur-sm">You</span>
-              </div>
-              <div className="absolute inset-x-0 bottom-4 flex justify-center px-3">
-                {/* Visual call controls; the preview selector below is interactive. */}
-                <div className="flex items-center gap-1.5 rounded-2xl border border-white/15 bg-[#18191b]/80 p-2 shadow-lg backdrop-blur-xl sm:gap-2" aria-hidden="true">
-                  <span className="grid size-8 place-items-center rounded-xl bg-white/15 sm:size-9"><Mic className="size-4" /></span>
-                  <span className="grid size-8 place-items-center rounded-xl bg-white/15 sm:size-9"><Video className="size-4" /></span>
-                  <span className={`grid size-8 place-items-center rounded-xl sm:size-9 ${screenPreview ? "bg-white text-[#111111]" : "bg-white/15"}`}><MonitorUp className="size-4" /></span>
-                  <span className="grid size-8 place-items-center rounded-xl bg-white/15 sm:size-9"><MessageSquare className="size-4" /></span>
-                  <span className="mx-0.5 h-5 w-px bg-white/20" />
-                  <span className="grid h-8 w-10 place-items-center rounded-xl bg-[#e3454f] sm:h-9 sm:w-11"><PhoneOff className="size-4" /></span>
-                </div>
-              </div>
-            </div>
-          </PreviewWindow>
-          <div className="mt-6 flex justify-center" role="group" aria-label="Choose a call preview">
-            <div className="inline-flex rounded-full border border-[#e5e5e5] bg-[#f1f1f1] p-1">
-              {[
-                { label: "Video call", screen: false, icon: Video },
-                { label: "Screen share", screen: true, icon: MonitorUp },
-              ].map(({ label, screen, icon: Icon }) => (
-                <button
-                  key={label}
-                  type="button"
-                  aria-pressed={screenPreview === screen}
-                  onClick={() => setScreenPreview(screen)}
-                  className={`flex items-center gap-2 rounded-full px-4 py-2 text-xs transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 motion-reduce:transition-none ${screenPreview === screen ? "bg-white text-[#222222] shadow-xs" : "text-[#777777] hover:text-[#222222]"}`}
-                >
-                  <Icon className="size-3.5" />{label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function getSessionTokenFromQr(value: string) {
   const scannedValue = value.trim()
 
@@ -444,7 +83,6 @@ function getSessionTokenFromQr(value: string) {
 
   return scannedValue
 }
-
 
 const FAQ_ITEMS = [
   {
@@ -485,38 +123,34 @@ const HERO_ILLUSTRATION_LAYERS = [
   {
     name: "phone",
     src: "/phonechat.png",
-    webpSrc: "/hero/phonechat.webp",
     crop: { x: 401, y: 126, width: 466, height: 1064 },
     position: { x: 700, y: 22, width: 420 },
     mobilePosition: { x: 130, y: 8, width: 200 },
-    motion: { x: 1.5, y: -4, duration: 10.5, delay: -0.8 },
+    motion: { y: 0, duration: 8.8, delay: -0.8 },
   },
   {
     name: "folder",
     src: "/folderdownload.png",
-    webpSrc: "/hero/folderdownload.webp",
     crop: { x: 92, y: 337, width: 1085, height: 685 },
     position: { x: 160, y: 152, width: 594 },
     mobilePosition: { x: 0, y: 116, width: 228 },
-    motion: { x: 3, y: -12, duration: 8.2, delay: -2.6 },
+    motion: { y: -8, duration: 7.4, delay: -2.6 },
   },
   {
     name: "call",
     src: "/videocall.png",
-    webpSrc: "/hero/videocall.webp",
     crop: { x: 314, y: 224, width: 646, height: 881 },
     position: { x: 227, y: 449, width: 370 },
     mobilePosition: { x: 10, y: 296, width: 132 },
-    motion: { x: -3, y: -10, duration: 9.4, delay: -4.8 },
+    motion: { y: -6, duration: 8.2, delay: -4.8 },
   },
   {
     name: "connection",
     src: "/speedtransfer.png",
-    webpSrc: "/hero/speedtransfer.webp",
     crop: { x: 488, y: 215, width: 438, height: 933 },
     position: { x: 1120, y: 337, width: 290 },
     mobilePosition: { x: 252, y: 268, width: 96 },
-    motion: { x: 2, y: -11, duration: 10.8, delay: -6.2 },
+    motion: { y: -7, duration: 9.6, delay: -6.2 },
   },
 ] as const
 
@@ -577,30 +211,24 @@ function HeroIllustration() {
       if (disposed) return
       const image = element.querySelector("img")
       const canvas = element.querySelector("canvas")
+      const context = canvas?.getContext("2d")
       const { width, height } = element.getBoundingClientRect()
-      if (!image?.complete || !image.naturalWidth || !canvas || !width || !height) return
+      if (!image?.complete || !image.naturalWidth || !canvas || !context || !width || !height) return
 
       // Prepare a detailed crop only on load/resize. CSS moves the finished
       // layer continuously; there is no per-frame redraw or pixel snapping.
-      try {
-        const context = canvas.getContext("2d")
-        if (!context) return
-        const density = Math.max(2, window.devicePixelRatio || 1)
-        canvas.width = Math.round(width * density)
-        canvas.height = Math.round(height * density)
-        const { crop } = HERO_ILLUSTRATION_LAYERS[index]
-        context.imageSmoothingEnabled = true
-        context.imageSmoothingQuality = "high"
-        context.drawImage(
-          image,
-          crop.x, crop.y, crop.width, crop.height,
-          0, 0, canvas.width, canvas.height
-        )
-        element.dataset.ready = "true"
-      } catch {
-        // Keep the loaded image visible if the canvas cannot be painted.
-        delete element.dataset.ready
-      }
+      const density = Math.max(2, window.devicePixelRatio || 1)
+      canvas.width = Math.round(width * density)
+      canvas.height = Math.round(height * density)
+      const { crop } = HERO_ILLUSTRATION_LAYERS[index]
+      context.imageSmoothingEnabled = true
+      context.imageSmoothingQuality = "high"
+      context.drawImage(
+        image,
+        crop.x, crop.y, crop.width, crop.height,
+        0, 0, canvas.width, canvas.height
+      )
+      element.dataset.ready = "true"
     }
 
     function paintLayers() {
@@ -628,38 +256,13 @@ function HeroIllustration() {
     densityQuery.addEventListener("change", handleDensityChange)
     document.addEventListener("visibilitychange", updatePlayback)
 
-    const imageCleanups = layers.map((element, index) => {
+    layers.forEach((element, index) => {
       const image = element.querySelector("img")
-      if (!image) return () => { }
-      let triedPngFallback = false
-
-      function showImage() {
-        if (disposed || !image?.naturalWidth) return
-        element.dataset.loaded = "true"
-        paintLayer(element, index)
-      }
-
-      function loadPngFallback() {
-        if (disposed || triedPngFallback || !image) return
-        triedPngFallback = true
-        // A failed WebP request does not automatically fall back in <picture>.
-        element.querySelector("source")?.removeAttribute("srcset")
-        image.src = HERO_ILLUSTRATION_LAYERS[index].src
-      }
-
-      image.addEventListener("load", showImage)
-      image.addEventListener("error", loadPngFallback)
-      void image.decode()
-        .then(showImage)
+      void image?.decode()
+        .then(() => paintLayer(element, index))
         .catch(() => {
-          if (image.complete && image.naturalWidth) showImage()
-          else if (image.complete) loadPngFallback()
+          // The original PNG remains the fallback if decoding fails.
         })
-
-      return () => {
-        image.removeEventListener("load", showImage)
-        image.removeEventListener("error", loadPngFallback)
-      }
     })
 
     return () => {
@@ -668,7 +271,6 @@ function HeroIllustration() {
       visibilityObserver.disconnect()
       densityQuery.removeEventListener("change", handleDensityChange)
       document.removeEventListener("visibilitychange", updatePlayback)
-      imageCleanups.forEach((cleanup) => cleanup())
     }
   }, [])
 
@@ -709,7 +311,6 @@ function HeroIllustration() {
           top: var(--hero-mobile-y);
           width: var(--hero-mobile-width);
           --hero-drift: var(--hero-mobile-drift);
-          --hero-sway: var(--hero-mobile-sway);
           animation: peertoss-hero-drift var(--hero-duration) ease-in-out var(--hero-delay) infinite;
           animation-play-state: var(--hero-play-state, paused);
           cursor: pointer;
@@ -718,8 +319,8 @@ function HeroIllustration() {
           transition: opacity 0.35s ease;
         }
         .peertoss-hero-layer[data-dimmed="true"] { opacity: 0.4; }
-        .peertoss-hero-layer[data-lifted="true"],
-        .peertoss-hero-layer:not([data-loaded="true"]) { animation-play-state: paused; }
+        .peertoss-hero-layer[data-hero-layer="phone"] { animation: none; }
+        .peertoss-hero-layer[data-hovered="true"] { animation-play-state: paused; }
         .peertoss-hero-frame {
           transition:
             transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
@@ -735,47 +336,18 @@ function HeroIllustration() {
           transition-duration: 0.12s;
         }
         @media (max-width: 639.98px) {
-          .peertoss-hero-layer[data-mobile-hidden="true"] {
-            pointer-events: none;
-            animation-play-state: paused;
-          }
+          .peertoss-hero-layer[data-mobile-hidden="true"] { pointer-events: none; }
           .peertoss-hero-layer[data-mobile-hidden="true"] .peertoss-hero-frame {
             opacity: 0;
             transform: translateX(var(--hero-slide-from, 26px)) scale(0.96);
           }
         }
-        .peertoss-hero-placeholder {
-          position: absolute;
-          inset: 6%;
-          overflow: hidden;
-          border: 1px solid #ebebee;
-          border-radius: 14px;
-          background: #f8f8fa;
-          transition: opacity 0.45s ease;
-        }
-        .peertoss-hero-placeholder::before,
-        .peertoss-hero-placeholder::after {
-          content: "";
-          position: absolute;
-          left: 12%;
-          height: 6%;
-          border-radius: 6px;
-          background: #ededf1;
-        }
-        .peertoss-hero-placeholder::before { top: 18%; width: 58%; }
-        .peertoss-hero-placeholder::after { top: 31%; width: 36%; }
-        .peertoss-hero-artwork {
-          opacity: 0;
-          transition: opacity 0.45s ease;
-        }
-        .peertoss-hero-layer[data-loaded="true"] .peertoss-hero-artwork { opacity: 1; }
-        .peertoss-hero-layer[data-loaded="true"] .peertoss-hero-placeholder { opacity: 0; }
         .peertoss-hero-layer canvas { visibility: hidden; }
         .peertoss-hero-layer[data-ready="true"] canvas { visibility: visible; }
         .peertoss-hero-layer[data-ready="true"] img { visibility: hidden; }
         @keyframes peertoss-hero-drift {
-          0%, 100% { transform: translate3d(0, 0, 0); }
-          50% { transform: translate3d(var(--hero-sway), var(--hero-drift), 0); }
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(var(--hero-drift)); }
         }
         @media (min-width: 640px) {
           .peertoss-hero-illustration {
@@ -788,13 +360,10 @@ function HeroIllustration() {
             top: var(--hero-y);
             width: var(--hero-width);
             --hero-drift: var(--hero-desktop-drift);
-            --hero-sway: var(--hero-desktop-sway);
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .peertoss-hero-layer { animation: none; transition: none; }
-          .peertoss-hero-artwork,
-          .peertoss-hero-placeholder { transition: none; }
+          .peertoss-hero-layer { animation: none; }
           .peertoss-hero-frame { transition: filter 0.3s ease, opacity 0.3s ease; }
           .peertoss-hero-layer[data-lifted="true"] .peertoss-hero-frame {
             transform: none;
@@ -805,7 +374,7 @@ function HeroIllustration() {
         }
       `}</style>
 
-        {HERO_ILLUSTRATION_LAYERS.map(({ name, src, webpSrc, crop, position, mobilePosition, motion }) => {
+        {HERO_ILLUSTRATION_LAYERS.map(({ name, src, crop, position, mobilePosition, motion }) => {
           const isHovered = hoveredLayer === name
           const isPinned = pinnedLayer === name
           const isDimmed =
@@ -838,37 +407,28 @@ function HeroIllustration() {
                 "--hero-mobile-width": `${((mobilePosition?.width ?? 0) / 350) * 100}%`,
                 "--hero-mobile-drift": `${motion.y * 0.6}px`,
                 "--hero-desktop-drift": `${motion.y}px`,
-                "--hero-mobile-sway": `${motion.x * 0.6}px`,
-                "--hero-desktop-sway": `${motion.x}px`,
                 "--hero-duration": `${motion.duration}s`,
                 "--hero-delay": `${motion.delay}s`,
                 aspectRatio: `${crop.width} / ${crop.height}`,
               } as CSSProperties}
             >
               <div className="peertoss-hero-frame relative size-full overflow-hidden">
-                <div className="peertoss-hero-placeholder" />
-                <div className="peertoss-hero-artwork absolute inset-0">
-                  <picture>
-                    <source srcSet={webpSrc} type="image/webp" />
-                    <img
-                      src={src}
-                      alt=""
-                      width={1254}
-                      height={1254}
-                      fetchPriority={name === "phone" ? "high" : "auto"}
-                      loading="eager"
-                      decoding="async"
-                      draggable={false}
-                      className="absolute block h-auto max-w-none select-none"
-                      style={{
-                        width: `${(1254 / crop.width) * 100}%`,
-                        left: `${(-crop.x / crop.width) * 100}%`,
-                        top: `${(-crop.y / crop.height) * 100}%`,
-                      }}
-                    />
-                  </picture>
-                  <canvas aria-hidden="true" className="absolute inset-0 block size-full" />
-                </div>
+                <img
+                  src={src}
+                  alt=""
+                  width={1254}
+                  height={1254}
+                  fetchPriority={name === "phone" ? "high" : "auto"}
+                  decoding="async"
+                  draggable={false}
+                  className="absolute block h-auto max-w-none select-none"
+                  style={{
+                    width: `${(1254 / crop.width) * 100}%`,
+                    left: `${(-crop.x / crop.width) * 100}%`,
+                    top: `${(-crop.y / crop.height) * 100}%`,
+                  }}
+                />
+                <canvas aria-hidden="true" className="absolute inset-0 block size-full" />
               </div>
             </div>
           )
@@ -903,7 +463,7 @@ function HeroIllustration() {
   )
 }
 
-const LandingPage = () => {
+const NewLandingPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const requestedRoomAction = (
@@ -928,7 +488,6 @@ const LandingPage = () => {
   const sessionAttemptRef = useRef(0)
   const lastCopyAtRef = useRef(0)
   const sharePendingRef = useRef(false)
-
 
   const sessionJoinUrl = session
     ? `${window.location.origin}/join?token=${encodeURIComponent(session.session_id)}`
@@ -1139,7 +698,6 @@ const LandingPage = () => {
 
   const handleQrDetect = useCallback(
     async (value: string) => {
-
       const code = getSessionTokenFromQr(value)
       setJoinCode(code)
       await handleJoinSession(code)
@@ -1202,12 +760,6 @@ const LandingPage = () => {
             </span>
           </button>
 
-          <a
-            href="#how-it-works"
-            className="hidden rounded-sm text-sm text-[#555555] hover:text-black focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 md:inline-block"
-          >
-            How it works
-          </a>
           <a
             href="#faq"
             className="hidden rounded-sm text-sm text-[#555555] hover:text-black focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 sm:inline-block"
@@ -1279,10 +831,6 @@ const LandingPage = () => {
           <HeroIllustration />
         </div>
       </section>
-
-      <CallFeature />
-      <FileSharingFeature onCreateRoom={() => setConfirmOpen(true)} />
-      <HowItWorksTimeline onCreateRoom={() => setConfirmOpen(true)} />
 
       <section
         id="faq"
@@ -1366,12 +914,53 @@ const LandingPage = () => {
             </DialogDescription>
           </DialogHeader>
 
-          <RoomInviteContent
-            code={session?.session_id ?? ""}
-            url={sessionJoinUrl}
-            onCopy={() => void copy(session?.session_id ?? "", "Pairing code")}
-            onShare={() => void handleShareInvite()}
-          />
+          <div className="flex flex-col items-center gap-4 py-1">
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+              <Suspense
+                fallback={
+                  <div
+                    className="flex size-[184px] items-center justify-center"
+                    aria-label="Loading QR code"
+                  >
+                    <Loader2 className="size-5 animate-spin text-slate-400" />
+                  </div>
+                }
+              >
+                <LazyQrCode value={sessionJoinUrl} size={184} />
+              </Suspense>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => copy(session?.session_id ?? "", "Pairing code")}
+                className="group flex items-center gap-2 rounded-xl border bg-muted px-4 py-2.5 font-mono text-sm font-medium tracking-[0.18em] transition hover:bg-accent"
+              >
+                {session?.session_id}
+                <Copy className="size-3.5 opacity-50 transition group-hover:opacity-100" />
+              </button>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleShareInvite()}
+                className="h-10 rounded-xl px-3"
+                aria-label="Share invitation link"
+                title="Share invitation link"
+              >
+                <Share2 className="size-4" />
+                Share invite
+              </Button>
+            </div>
+
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="relative flex size-2">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-400 opacity-60" />
+                <span className="relative inline-flex size-2 rounded-full bg-amber-500" />
+              </span>
+              Waiting for the other device…
+            </p>
+          </div>
 
           <DialogFooter>
             <Button
@@ -1485,4 +1074,4 @@ const LandingPage = () => {
   )
 }
 
-export default LandingPage
+export default NewLandingPage

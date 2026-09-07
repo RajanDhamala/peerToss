@@ -173,7 +173,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
-	// cleanup
 	defer func() {
 		client.Close()
 
