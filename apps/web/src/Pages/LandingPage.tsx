@@ -6,7 +6,7 @@ import {
 import { useLocation, useNavigate } from "react-router"
 import toast from "react-hot-toast"
 import {
-  ArrowRight, ArrowUpRight, Check, ChevronDown, Copy, FileText, FolderUp, Laptop,
+  ArrowRight, ArrowUp, ArrowUpRight, Check, ChevronDown, Copy, FileText, FolderUp, Laptop,
   Link2, Loader2, MessageSquare, Mic, MonitorUp, PhoneOff, QrCode, ScanLine, Share2, ShieldCheck, Smartphone, Upload, Video,
 } from "lucide-react"
 
@@ -1184,7 +1184,7 @@ const LandingPage = () => {
   }
 
   return (
-    <main className="min-h-dvh bg-white font-sans text-[#111111] selection:bg-violet-100">
+    <main id="top" className="min-h-dvh bg-white font-sans text-[#111111] selection:bg-violet-100">
       <header>
         <nav
           aria-label="Main navigation"
@@ -1196,24 +1196,16 @@ const LandingPage = () => {
             className="flex shrink-0 items-center gap-2.5 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500"
             aria-label="PeerToss home"
           >
-            <img src="/peertoss-logo.svg" alt="" className="size-8" />
-            <span className="text-lg font-semibold tracking-[-0.04em]">
-              PeerToss
-            </span>
+            <img
+              src="/peertoss-wordmark.svg?v=2"
+              alt="PeerToss"
+              width="144"
+              height="38"
+              className="h-auto w-32 sm:w-36"
+            />
           </button>
 
-          <a
-            href="#how-it-works"
-            className="hidden rounded-sm text-sm text-[#555555] hover:text-black focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 md:inline-block"
-          >
-            How it works
-          </a>
-          <a
-            href="#faq"
-            className="hidden rounded-sm text-sm text-[#555555] hover:text-black focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500 sm:inline-block"
-          >
-            FAQs
-          </a>
+
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <Button
@@ -1239,40 +1231,55 @@ const LandingPage = () => {
           <div className="relative z-10 max-w-[480px]">
             <h1
               id="hero-title"
-              className="text-[clamp(2.5rem,5vw,3.75rem)] font-semibold leading-[1.08] tracking-[-0.055em]"
+              className="text-[clamp(2.5rem,5vw,3.75rem)] font-semibold leading-[1.3] tracking-[-0.055em]"
             >
               Share anything.
               <br />
               Stay connected.
             </h1>
-            <p className="mt-6 max-w-[400px] text-base leading-[1.75] text-[#494949] sm:text-[17px]">
-              Send files and folders straight to another device. Make a call or
-              share your screen, all in one private room.
+            <p className="mt-5 max-w-[400px] text-base leading-[1.75] text-[#494949] sm:text-[17px]">
+              Send files, share your screen, or start a call between two devices.
+              First, create a room on this device.
             </p>
 
-            <div className="mt-7 flex flex-wrap items-center gap-3 sm:mt-8">
+            <div className="mt-7 max-w-[400px]">
+              <p className="mb-2.5 text-xs font-semibold text-violet-700">
+                Start here
+              </p>
               <Button
+                type="button"
                 size="lg"
-                className="h-11 rounded-lg bg-[#111111] px-5 text-sm font-medium text-white shadow-none hover:bg-[#303030]"
+                aria-describedby="hero-create-hint"
+                className="group h-14 w-full justify-between rounded-xl bg-violet-600 px-5 text-base font-semibold text-white shadow-[0_8px_22px_-10px_rgba(124,58,237,0.5)] transition-colors hover:bg-violet-700 focus-visible:ring-violet-400 focus-visible:ring-offset-2 has-[>svg]:px-5 motion-reduce:transition-none"
                 onClick={() => setConfirmOpen(true)}
               >
-                Create a room
-                <ArrowRight className="ml-1 size-4" />
+                Create a free room
+                <ArrowRight className="size-5" />
               </Button>
-              <Button
-                size="lg"
-                variant="outline"
-                className="h-11 rounded-lg border-[#dddddd] bg-white px-5 text-sm font-medium text-[#222222] shadow-none hover:border-[#c4b5fd] hover:bg-[#faf8ff]"
-                onClick={() => setJoinOpen(true)}
-              >
-                <QrCode className="size-4" />
-                Join with a code
-              </Button>
+              <p id="hero-create-hint" className="mt-2.5 text-[13px] leading-5 text-[#606060]">
+                Then scan the QR code on your other device to connect.
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                <p id="hero-join-hint" className="text-[13px] text-[#606060]">
+                  Already have a room code?
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-describedby="hero-join-hint"
+                  className="h-11 rounded-xl border-[#cccccc] bg-white px-4 text-sm font-medium text-[#222222] shadow-none hover:border-violet-400 hover:bg-violet-50 focus-visible:ring-violet-400 focus-visible:ring-offset-2 motion-reduce:transition-none"
+                  onClick={() => setJoinOpen(true)}
+                >
+                  <QrCode className="size-4" />
+                  Join a room
+                </Button>
+              </div>
             </div>
 
-            <p className="mt-4 text-sm leading-6 text-[#777777]">
-              No sign-up. Nothing to install. Files go straight between your
-              devices.
+            <p className="mt-5 flex items-center gap-2 text-xs leading-6 text-[#777777]">
+              <ShieldCheck className="size-3.5 shrink-0" aria-hidden="true" />
+              No sign-up. Nothing to install.
             </p>
           </div>
 
@@ -1323,6 +1330,52 @@ const LandingPage = () => {
           ))}
         </div>
       </section>
+
+      <footer role="contentinfo" className="border-t border-[#e5e5e5] bg-[#fafafa]">
+        <div className="mx-auto flex max-w-[1360px] flex-col gap-5 px-5 py-7 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-8 lg:px-12">
+          <div>
+            <img
+              src="/peertoss-wordmark.svg?v=2"
+              alt="PeerToss"
+              width="112"
+              height="29"
+              className="h-auto w-28"
+            />
+            <p className="mt-2 text-xs leading-6 text-[#606060]">
+              Direct sharing. Just your devices.
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <div className="flex flex-wrap items-center gap-x-5 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setJoinOpen(true)}
+                className="inline-flex min-h-11 items-center rounded-sm text-sm font-medium hover:text-violet-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500"
+              >
+                Join a room
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmOpen(true)}
+                className="inline-flex min-h-11 items-center rounded-sm text-sm font-medium hover:text-violet-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500"
+              >
+                Create a room
+              </button>
+              <a
+                href="#top"
+                className="inline-flex min-h-11 items-center gap-2 rounded-sm text-sm font-medium hover:text-violet-700 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-violet-500"
+              >
+                Back to top
+                <ArrowUp className="size-3.5" aria-hidden="true" />
+              </a>
+            </div>
+            <p className="text-xs leading-6 text-[#777777]">
+              © {new Date().getFullYear()} PeerToss
+            </p>
+          </div>
+        </div>
+      </footer>
 
       <Dialog
         open={confirmOpen}

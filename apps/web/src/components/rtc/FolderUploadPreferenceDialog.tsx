@@ -76,7 +76,7 @@ function FolderUploadPreferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="rounded-3xl font-sans sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Choose folder contents</DialogTitle>
           <DialogDescription>
@@ -93,10 +93,10 @@ function FolderUploadPreferenceDialog({
             return (
               <label
                 key={option.value}
-                className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition-colors ${
+                className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-3.5 transition-colors focus-within:ring-2 focus-within:ring-violet-500 motion-reduce:transition-none ${
                   selected
-                    ? "border-[#16947F] bg-[#E7F5F1]"
-                    : "border-[#E4E1DA] bg-white hover:bg-[#F5F4F0]"
+                    ? "border-violet-400 bg-violet-50 dark:border-violet-700 dark:bg-violet-950/40"
+                    : "border-border bg-card hover:bg-muted/50"
                 }`}
               >
                 <input
@@ -107,27 +107,27 @@ function FolderUploadPreferenceDialog({
                   onChange={() => onPreferenceChange(option.value)}
                   className="sr-only"
                 />
-                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-white text-[#4B5160] shadow-sm">
+                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-card text-muted-foreground shadow-sm">
                   <Icon className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2 text-sm font-semibold text-[#14171F]">
+                  <span className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
                     {option.title}
                     {option.value === "ignore" && (
-                      <span className="rounded-full bg-[#16947F] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                      <span className="rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-medium text-white">
                         Recommended
                       </span>
                     )}
                   </span>
-                  <span className="mt-1 block text-xs leading-relaxed text-[#6F6B61]">
+                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
                     {option.description}
                   </span>
                 </span>
                 <span
                   className={`mt-1 grid size-5 shrink-0 place-items-center rounded-full border ${
                     selected
-                      ? "border-[#16947F] bg-[#16947F] text-white"
-                      : "border-[#C4C0B5] text-transparent"
+                      ? "border-violet-600 bg-violet-600 text-white"
+                      : "border-input text-transparent"
                   }`}
                   aria-hidden="true"
                 >
@@ -138,21 +138,21 @@ function FolderUploadPreferenceDialog({
           })}
         </fieldset>
 
-        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-1 py-1 text-sm text-[#4B5160]">
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-1 py-1 text-sm text-muted-foreground">
           <input
             type="checkbox"
             checked={remember}
             onChange={(event) => onRememberChange(event.target.checked)}
-            className="size-4 accent-[#16947F]"
+            className="size-4 accent-violet-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
           />
           Don&apos;t ask again on this device
         </label>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" className="h-11 rounded-xl shadow-none focus-visible:ring-violet-400" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" onClick={onContinue}>
+          <Button type="button" className="h-11 rounded-xl bg-violet-600 text-white hover:bg-violet-700 focus-visible:ring-violet-400" onClick={onContinue}>
             Continue
           </Button>
         </DialogFooter>

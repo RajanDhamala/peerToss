@@ -2,6 +2,7 @@ import { useId } from "react"
 import { ArrowDown, ArrowUp, Loader2 } from "lucide-react"
 
 import type { SpeedDirection } from "@/components/rtc/types"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const SPEED_STOPS = [0, 5, 10, 50, 100, 250, 500, 750, 1000]
@@ -100,7 +101,7 @@ function SpeedMeter({
 
   return (
     <section
-      className={cn("flex h-full min-h-[320px] flex-col", className)}
+      className={cn("flex h-full min-h-[320px] flex-col font-sans text-card-foreground", className)}
       aria-labelledby={titleId}
     >
       <style>{`
@@ -123,40 +124,41 @@ function SpeedMeter({
         @media (prefers-reduced-motion: reduce) {
           .ptx-speed-track-scan,
           .ptx-speed-needle-scan { animation: none; }
+          .ptx-speed-dial * { transition: none !important; }
         }
       `}</style>
 
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 id={titleId} className="ptx-display text-sm font-semibold text-[#14171F]">
-            Direct link speed
+          <h2 id={titleId} className="text-[15px] font-semibold tracking-tight">
+            Connection speed
           </h2>
-          <p className="mt-1 text-xs leading-relaxed text-[#8A8776]">
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             Device-to-device throughput.
           </p>
         </div>
-        <span className="rounded-full border border-[#E4E1DA] bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#4B5160]">
-          WebRTC
+        <span className="rounded-full border border-border bg-muted/30 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+          P2P
         </span>
       </div>
 
       <div className="mt-3 flex items-end justify-between gap-3">
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[#8A8776]">
-          <ArrowUp className="size-3.5 text-[#05BCE7]" />
+        <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+          <ArrowUp className="size-3.5 text-violet-500" />
           Your upload
         </span>
         <div className="text-right">
-          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-[#8A8776]">
-            <ArrowDown className="size-3 text-[#16947F]" />
+          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            <ArrowDown className="size-3 text-emerald-600 dark:text-emerald-400" />
             Download
           </span>
-          <p className="ptx-mono mt-0.5 text-sm font-medium text-[#14171F]">
-            {formatSpeed(downloadMbps)} <span className="text-[10px] text-[#8A8776]">Mbps</span>
+          <p className="font-mono tabular-nums mt-0.5 text-sm font-medium text-foreground">
+            {formatSpeed(downloadMbps)} <span className="text-[10px] text-muted-foreground">Mbps</span>
           </p>
         </div>
       </div>
 
-      <div className="relative mx-auto -mt-1 w-full max-w-[285px]">
+      <div className="relative mx-auto -mt-1 w-full max-w-[285px] md:max-w-[340px]">
         <svg
           viewBox="0 0 300 225"
           role="meter"
@@ -164,22 +166,22 @@ function SpeedMeter({
           aria-valuemin={0}
           aria-valuemax={1000}
           aria-valuenow={uploadMbps ?? 0}
-          className="block h-auto w-full overflow-visible"
+          className="ptx-speed-dial block h-auto w-full overflow-visible"
         >
           <defs>
             <linearGradient id={activeGradientId} x1="0%" y1="100%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#05BCE7" />
-              <stop offset="100%" stopColor="#45D9EF" />
+              <stop offset="0%" stopColor="#7c3aed" />
+              <stop offset="100%" stopColor="#c4b5fd" />
             </linearGradient>
             <linearGradient id={needleGradientId} x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#8E8F8B" />
-              <stop offset="72%" stopColor="#C8C8C3" />
-              <stop offset="100%" stopColor="#F4F4F1" stopOpacity="0.3" />
+              <stop offset="0%" stopColor="#7c3aed" />
+              <stop offset="72%" stopColor="#a78bfa" />
+              <stop offset="100%" stopColor="#c4b5fd" />
             </linearGradient>
             <radialGradient id={faceGradientId} cx="50%" cy="45%" r="62%">
-              <stop offset="0%" stopColor="#FFFFFF" />
-              <stop offset="72%" stopColor="#FAFAF8" />
-              <stop offset="100%" stopColor="#F1F1EE" />
+              <stop offset="0%" stopColor="var(--card)" />
+              <stop offset="72%" stopColor="var(--card)" />
+              <stop offset="100%" stopColor="var(--muted)" />
             </radialGradient>
             <filter id={needleShadowId} x="-30%" y="-30%" width="160%" height="160%">
               <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#14171F" floodOpacity="0.12" />
@@ -189,9 +191,18 @@ function SpeedMeter({
           <path
             d={trackPath}
             fill="none"
-            stroke="#E6E6E3"
+            stroke="currentColor"
+            strokeWidth="20"
+            strokeLinecap="round"
+            className="text-[#B8BEC8] dark:text-[#626B79]"
+          />
+          <path
+            d={trackPath}
+            fill="none"
+            stroke="currentColor"
             strokeWidth="18"
             strokeLinecap="round"
+            className="text-[#E4E7EC] dark:text-[#343B47]"
           />
 
           {(ratio > 0 || running) && (
@@ -235,7 +246,7 @@ function SpeedMeter({
                 y1={tickStart.y}
                 x2={tickEnd.x}
                 y2={tickEnd.y}
-                stroke="#D8D7D1"
+                stroke="var(--border)"
                 strokeWidth="0.85"
               />
             )
@@ -255,7 +266,7 @@ function SpeedMeter({
                   y1={tickStart.y}
                   x2={tickEnd.x}
                   y2={tickEnd.y}
-                  stroke={isActiveStop ? "#05BCE7" : "#BEBDB7"}
+                  stroke={isActiveStop ? "#8b5cf6" : "var(--muted-foreground)"}
                   strokeWidth={isActiveStop ? "1.8" : "1.25"}
                 />
                 <text
@@ -263,8 +274,8 @@ function SpeedMeter({
                   y={label.y}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill={isActiveStop ? "#4B5160" : "#A5A39C"}
-                  className="ptx-mono"
+                  fill={isActiveStop ? "var(--foreground)" : "var(--muted-foreground)"}
+                  className="font-mono tabular-nums"
                   fontSize="9.5"
                   fontWeight={isActiveStop ? "700" : "600"}
                 >
@@ -294,18 +305,18 @@ function SpeedMeter({
             cx={DIAL_CENTER_X}
             cy={DIAL_CENTER_Y}
             r="7"
-            fill="#F8F8F5"
-            stroke="#9D9D97"
+            fill="var(--card)"
+            stroke="#a78bfa"
             strokeWidth="2"
           />
-          <circle cx={DIAL_CENTER_X} cy={DIAL_CENTER_Y} r="2.5" fill="#777872" />
+          <circle cx={DIAL_CENTER_X} cy={DIAL_CENTER_Y} r="2.5" fill="#8b5cf6" />
 
           <text
             x={DIAL_CENTER_X}
             y="183"
             textAnchor="middle"
-            fill="#4B5160"
-            className="ptx-mono"
+            fill="var(--foreground)"
+            className="font-mono tabular-nums"
             fontSize="28"
             fontWeight="400"
           >
@@ -315,8 +326,8 @@ function SpeedMeter({
             x={DIAL_CENTER_X}
             y="203"
             textAnchor="middle"
-            fill="#A5A39C"
-            className="ptx-mono"
+            fill="var(--muted-foreground)"
+            className="font-mono tabular-nums"
             fontSize="11"
           >
             Mbps upload
@@ -324,15 +335,16 @@ function SpeedMeter({
         </svg>
       </div>
 
-      <p className="-mt-1 min-h-4 text-center text-[11px] text-[#8A8776]">
+      <p className="-mt-1 mb-4 min-h-4 text-center text-[11px] leading-5 text-muted-foreground">
         {statusText}
       </p>
 
-      <button
+      <Button
         type="button"
+        variant="outline"
         onClick={onRun}
         disabled={disabled}
-        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#05BCE7] disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
+        className="mt-auto h-11 w-full rounded-xl border-input bg-card px-4 text-sm shadow-none hover:bg-muted/50 focus-visible:ring-violet-400 disabled:bg-muted/50 disabled:text-muted-foreground motion-reduce:transition-none"
       >
         {running && <Loader2 className="size-3.5 animate-spin" />}
         {running
@@ -340,7 +352,7 @@ function SpeedMeter({
           : uploadMbps === null && downloadMbps === null
             ? "Run speed test"
             : "Test again"}
-      </button>
+      </Button>
     </section>
   )
 }
