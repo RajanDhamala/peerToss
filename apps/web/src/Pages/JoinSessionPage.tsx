@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import toast from "react-hot-toast"
-import { AlertCircle, ArrowLeft, Loader2, Radio } from "lucide-react"
+import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router"
 
 import useUserStore, { type AppWebSocket } from "@/UserStore"
@@ -139,57 +139,80 @@ function JoinSessionPage() {
     : "This invite link does not contain a session token."
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-[#F5F4F0] px-4 text-[#14171F]">
-      <section className="w-full max-w-md rounded-2xl border border-[#E4E1DA] bg-white p-6 text-center shadow-sm sm:p-8">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-[#14171F]">
-          {visibleJoinState === "error" ? (
-            <AlertCircle className="size-5 text-red-300" />
-          ) : (
-            <Radio className="size-5 text-[#F2A33C]" />
-          )}
+    <main className="flex min-h-dvh flex-col bg-[#f2f3f5] font-sans text-foreground selection:bg-violet-100 selection:text-violet-950 dark:bg-[#111214] dark:selection:bg-violet-900 dark:selection:text-violet-100">
+      <header className="border-b border-border bg-card">
+        <div className="mx-auto flex min-h-20 w-full max-w-[1360px] items-center gap-5 px-5 sm:px-8 lg:px-12">
+          <Link
+            to="/"
+            aria-label="PeerToss home"
+            className="shrink-0 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-4 focus-visible:ring-offset-card"
+          >
+            <img
+              src="/peertoss-wordmark.svg?v=2"
+              alt="PeerToss"
+              width="127"
+              height="33"
+              className="h-8 w-auto dark:invert"
+            />
+          </Link>
+          <span className="border-l border-border pl-5 text-sm text-muted-foreground">
+            Join room
+          </span>
         </div>
+      </header>
 
-        <h1 className="mt-5 text-xl font-semibold">
-          {visibleJoinState === "error" ? "Could not join room" : "Joining room"}
-        </h1>
-
-        {visibleJoinState === "error" ? (
-          <>
-            <p className="mt-2 text-sm leading-relaxed text-[#6F6B5F]">
-              {visibleErrorMessage}
-            </p>
-            <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
-              {token && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setJoinState("joining")
-                    setErrorMessage("")
-                    setAttempt((current) => current + 1)
-                  }}
-                  className="rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A]"
-                >
-                  Try again
-                </button>
-              )}
-              <Link
-                to="/"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#E4E1DA] px-4 py-2.5 text-sm font-medium transition-colors hover:bg-[#F5F4F0]"
-              >
-                <ArrowLeft className="size-4" />
-                Back to PeerToss
-              </Link>
-            </div>
-          </>
-        ) : (
-          <div className="mt-4 flex items-center justify-center gap-2 text-sm text-[#6F6B5F]">
-            <Loader2 className="size-4 animate-spin" />
-            {visibleJoinState === "joining"
-              ? "Checking your invite…"
-              : "Opening the secure connection…"}
+      <div className="grid flex-1 place-items-center px-5 py-10 sm:px-8">
+        <section
+          aria-labelledby="join-room-title"
+          className="w-full max-w-md rounded-2xl border border-[#dedfe3] bg-card p-6 text-card-foreground shadow-[0_2px_8px_rgba(0,0,0,0.04)] dark:border-border sm:p-8"
+        >
+          <div className="flex items-center gap-3">
+            {visibleJoinState === "error" && (
+              <AlertCircle className="size-5 shrink-0 text-red-600 dark:text-red-400" aria-hidden="true" />
+            )}
+            <h1 id="join-room-title" className="text-xl font-semibold tracking-tight">
+              {visibleJoinState === "error" ? "Could not join room" : "Joining room"}
+            </h1>
           </div>
-        )}
-      </section>
+
+          {visibleJoinState === "error" ? (
+            <>
+              <p role="alert" className="mt-3 break-words text-sm leading-6 text-muted-foreground">
+                {visibleErrorMessage}
+              </p>
+              <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+                {token && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setJoinState("joining")
+                      setErrorMessage("")
+                      setAttempt((current) => current + 1)
+                    }}
+                    className="min-h-11 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-2 focus-visible:ring-offset-card motion-reduce:transition-none dark:bg-foreground dark:text-background dark:hover:bg-foreground/90"
+                  >
+                    Try again
+                  </button>
+                )}
+                <Link
+                  to="/"
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-input bg-card px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-2 focus-visible:ring-offset-card motion-reduce:transition-none"
+                >
+                  <ArrowLeft className="size-4" aria-hidden="true" />
+                  Back to PeerToss
+                </Link>
+              </div>
+            </>
+          ) : (
+            <div role="status" className="mt-4 flex items-center gap-3 text-sm leading-6 text-muted-foreground">
+              <Loader2 className="size-5 shrink-0 animate-spin text-[#357A4B] motion-reduce:animate-none dark:text-[#8DCEA1]" aria-hidden="true" />
+              {visibleJoinState === "joining"
+                ? "Checking your invite…"
+                : "Connecting to your peer…"}
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   )
 }
