@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react"
+import * as Dialog from "@radix-ui/react-dialog"
 import { PhoneOff, Video } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 
@@ -107,88 +108,64 @@ function RtcCallOverlay() {
     previousCallStatus.current = callStatus
   }, [callStatus, location.pathname, navigate])
 
-  useEffect(() => {
-    if (callStatus !== "incoming" && callStatus !== "outgoing") return
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return
-      if (callStatus === "incoming") rtcSession.rejectVideoCall()
-      else rtcSession.cancelVideoCall()
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [callStatus])
-
   if (callStatus !== "incoming" && callStatus !== "outgoing") return null
 
   const incoming = callStatus === "incoming"
+  const dismissCall = () => {
+    if (incoming) rtcSession.rejectVideoCall()
+    else rtcSession.cancelVideoCall()
+  }
 
   return (
-    <div className="fixed inset-0 z-[100] grid place-items-center bg-[#14171F]/55 px-4 backdrop-blur-sm">
-      <section
-        aria-describedby="video-call-description"
-        aria-labelledby="video-call-title"
-        aria-modal="true"
-        className="w-full max-w-sm rounded-3xl border border-white/70 bg-white p-6 text-center text-[#14171F] shadow-2xl sm:p-7"
-        role="dialog"
-      >
-        <div className="relative mx-auto grid size-20 place-items-center">
-          <span className="absolute inset-0 animate-ping rounded-full bg-[#F2A33C]/25" />
-          <span className="relative grid size-16 place-items-center rounded-full bg-[#14171F] text-white shadow-lg">
-            <Video className="size-7" strokeWidth={1.8} />
-          </span>
-        </div>
-
-        <p className="ptx-mono mt-5 text-[10px] font-medium uppercase tracking-[0.18em] text-[#8A8776]">
-          {incoming ? "Incoming call" : "Calling"}
-        </p>
-        <h2
-          className="ptx-display mt-1.5 text-xl font-semibold"
-          id="video-call-title"
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) dismissCall()
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[100] bg-black/30" />
+        <Dialog.Content
+          onInteractOutside={(event) => event.preventDefault()}
+          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-[101] max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 overflow-y-auto rounded-2xl border border-border bg-card font-sans text-card-foreground shadow-xl focus:outline-none sm:bottom-auto sm:top-1/2 sm:-translate-y-1/2"
         >
-          {incoming ? "Peer is calling you" : "Calling your peer…"}
-        </h2>
-        <p
-          className="mx-auto mt-2 max-w-64 text-sm leading-relaxed text-[#6D6A60]"
-          id="video-call-description"
-        >
-          {incoming
-            ? "Accept to open the private video call, or decline to stay here."
-            : "The request was sent through your direct WebRTC connection."}
-        </p>
-
-        {incoming ? (
-          <div className="mt-7 grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => rtcSession.rejectVideoCall()}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-[#E4E1DA] bg-white text-sm font-semibold transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
-            >
-              <PhoneOff className="size-4" strokeWidth={1.9} />
-              Decline
-            </button>
-            <button
-              type="button"
-              onClick={() => rtcSession.acceptVideoCall()}
-              className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#16947F] text-sm font-semibold text-white transition-colors hover:bg-[#117B6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
-            >
-              <Video className="size-4" strokeWidth={1.9} />
-              Accept
-            </button>
+          <div className="flex items-center gap-3.5 px-5 py-6">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-muted/40 text-muted-foreground">
+              <Video className="size-5" strokeWidth={1.8} aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <Dialog.Title className="text-lg font-semibold tracking-tight">
+                {incoming ? "Incoming video call" : "Calling your peer…"}
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 text-sm leading-5 text-muted-foreground">
+                {incoming ? "Your peer is waiting." : "Waiting for an answer."}
+              </Dialog.Description>
+            </div>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => rtcSession.cancelVideoCall()}
-            className="mt-7 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-semibold text-white transition-colors hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
-          >
-            <PhoneOff className="size-4" strokeWidth={1.9} />
-            Cancel call
-          </button>
-        )}
-      </section>
-    </div>
+
+          <div className={`grid gap-3 border-t border-border p-4 ${incoming ? "grid-cols-2" : "grid-cols-1"}`}>
+            <button
+              type="button"
+              onClick={dismissCall}
+              className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] motion-reduce:transition-none"
+            >
+              <PhoneOff className="size-4 text-red-600 dark:text-red-400" strokeWidth={1.9} aria-hidden="true" />
+              {incoming ? "Decline" : "Cancel call"}
+            </button>
+            {incoming && (
+              <button
+                type="button"
+                onClick={() => rtcSession.acceptVideoCall()}
+                className="inline-flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-xl bg-[#357A4B] px-3 text-sm font-medium text-white transition-colors hover:bg-[#2C663E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-2 focus-visible:ring-offset-card motion-reduce:transition-none"
+              >
+                <Video className="size-4" strokeWidth={1.9} aria-hidden="true" />
+                Answer
+              </button>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 

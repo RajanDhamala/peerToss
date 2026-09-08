@@ -16,6 +16,7 @@ import {
 import { toast } from "react-hot-toast"
 
 import { FileTypeIcon } from "@/components/rtc/FileTypeIcon"
+import { ChatMessageContent } from "@/components/rtc/ChatMessageContent"
 import { useFolderUploadPreference } from "@/components/rtc/FolderUploadPreferenceDialog"
 import { formatBytes, formatTime, type ChatItem } from "@/components/rtc/types"
 import { Button } from "@/components/ui/button"
@@ -307,9 +308,9 @@ function MessagePanel({
                               <ExternalLink className="size-3.5 shrink-0" />
                             </a>
                           ) : (
-                            <p className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-[#DBDEE1]">
-                              {message.text}
-                            </p>
+                            <div className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-[#DBDEE1]">
+                              <ChatMessageContent text={message.text} />
+                            </div>
                           )
                         ) : (
                           <FileMessage message={message} />

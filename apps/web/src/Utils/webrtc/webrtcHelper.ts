@@ -1,8 +1,11 @@
 // Minimal WebRTC setup. Signaling (exchanging offer/answer/ICE over the ws)
 // is handled separately — see the TODOs below.
 
+import { IS_PRODUCTION } from "@/Config/Environment"
+
 export const ICE_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  // Local development uses host candidates only, without external STUN requests.
+  iceServers: IS_PRODUCTION ? [{ urls: "stun:stun.l.google.com:19302" }] : [],
 }
 
 export async function createPeer(): Promise<RTCPeerConnection> {

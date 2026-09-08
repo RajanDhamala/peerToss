@@ -10,19 +10,23 @@ import {
   Gauge,
   Loader2,
   MessageCircle,
+  ShieldCheck,
   Upload,
 } from "lucide-react"
 
 import useUserStore from "@/UserStore"
 import { ManifestPanel } from "@/components/rtc/ManifestPanel"
 import { SpeedMeter } from "@/components/rtc/SpeedMeter"
+import { RoomBackdrop } from "@/components/rtc/RoomBackdrop"
 import { useFolderUploadPreference } from "@/components/rtc/FolderUploadPreferenceDialog"
 import { formatBytes } from "@/components/rtc/types"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog"
 import {
   RTC_SPEED_TEST_SAMPLE_SIZE,
@@ -46,34 +50,43 @@ function RtcPage() {
   const ws = useUserStore((state) => state.ws)
   const setWs = useUserStore((state) => state.setWs)
   const peerCreated = useRtcStore((state) => state.peerCreated)
-  const chatChannelPresent = useRtcStore(
-    (state) => state.chatChannelPresent
-  )
-  const fileChannelPresent = useRtcStore(
-    (state) => state.fileChannelPresent
-  )
+  const chatChannelPresent = useRtcStore((state) => state.chatChannelPresent)
+  const fileChannelPresent = useRtcStore((state) => state.fileChannelPresent)
   const chatReady = useRtcStore((state) => state.chatReady)
   const fileReady = useRtcStore((state) => state.fileReady)
   const messages = useRtcStore((state) => state.messages)
   const sendingFile = useRtcStore((state) => state.sendingFile)
   const uploadMbps = useRtcStore((state) => state.uploadMbps)
   const downloadMbps = useRtcStore((state) => state.downloadMbps)
-  const speedTestRunning = useRtcStore(
-    (state) => state.speedTestRunning
-  )
-  const speedTestDirection = useRtcStore(
-    (state) => state.speedTestDirection
-  )
-  const speedTestWaiting = useRtcStore(
-    (state) => state.speedTestWaiting
-  )
+  const speedTestRunning = useRtcStore((state) => state.speedTestRunning)
+  const speedTestDirection = useRtcStore((state) => state.speedTestDirection)
+  const speedTestWaiting = useRtcStore((state) => state.speedTestWaiting)
   const callStatus = useRtcStore((state) => state.callStatus)
 
   const [draft, setDraft] = useState("")
   const [draggingFile, setDraggingFile] = useState(false)
-  const [mobileSpeedOpen, setMobileSpeedOpen] = useState(false)
   const [mobileChatOpen, setMobileChatOpen] = useState(false)
-  const [isMouseOver, setIsMouseOver] = useState(false)
+  const [lastReadTextMessageId, setLastReadTextMessageId] = useState<
+    string | null
+  >(null)
+  const [desktopChat, setDesktopChat] = useState(
+    () => window.matchMedia("(min-width: 1024px)").matches
+  )
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)")
+    const handleChange = (event: MediaQueryListEvent) => {
+      setDesktopChat(event.matches)
+      setMobileChatOpen(false)
+      const latest = useRtcStore
+        .getState()
+        .messages.filter((item) => item.kind === "text")
+        .at(-1)
+      setLastReadTextMessageId(latest?.id ?? null)
+    }
+    query.addEventListener("change", handleChange)
+    return () => query.removeEventListener("change", handleChange)
+  }, [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
@@ -89,11 +102,28 @@ function RtcPage() {
   const transferChannelOpen = fileReady
   const directConnectionOpen = channelOpen && transferChannelOpen
   const textMessages = messages.filter((item) => item.kind === "text")
+  const lastReadIndex = textMessages.findIndex(
+    (item) => item.id === lastReadTextMessageId
+  )
+  const unreadMessageCount =
+    mobileChatOpen || desktopChat
+      ? 0
+      : textMessages.slice(lastReadIndex + 1).filter((item) => !item.mine)
+          .length
+  const unreadMessageLabel = `${unreadMessageCount} unread message${unreadMessageCount === 1 ? "" : "s"}`
+
+  const handleMobileChatOpenChange = (open: boolean) => {
+    const latest = useRtcStore
+      .getState()
+      .messages.filter((item) => item.kind === "text")
+      .at(-1)
+    setLastReadTextMessageId(latest?.id ?? null)
+    setMobileChatOpen(open)
+  }
   const transfers = messages.filter((item) => item.kind !== "text")
   const activeCount = transfers.filter(
     (item) =>
-      item.transferStatus === "sending" ||
-      item.transferStatus === "receiving"
+      item.transferStatus === "sending" || item.transferStatus === "receiving"
   ).length
 
   const connectionLabel = directConnectionOpen
@@ -106,13 +136,9 @@ function RtcPage() {
           ? "Opening channels…"
           : "Connecting…"
 
-  const canChooseFile =
-    transferChannelOpen && !sendingFile && !speedTestRunning
+  const canChooseFile = transferChannelOpen && !sendingFile && !speedTestRunning
   const speedTestDisabled =
-    !transferChannelOpen ||
-    sendingFile ||
-    activeCount > 0 ||
-    speedTestRunning
+    !transferChannelOpen || sendingFile || activeCount > 0 || speedTestRunning
 
   const updateDraft = (value: string) => {
     if (getMessagePayloadSize(value) > CHAT_MESSAGE_MAX_BYTES) {
@@ -126,16 +152,21 @@ function RtcPage() {
     setDraft(value)
   }
 
-  const sendMessage = () => {
-    if (getMessagePayloadSize(draft.trim()) > CHAT_MESSAGE_MAX_BYTES) {
+  const sendMessage = (
+    message: string,
+    options?: { preserveDraft?: boolean }
+  ) => {
+    if (getMessagePayloadSize(message.trim()) > CHAT_MESSAGE_MAX_BYTES) {
       toast.error(
         `Messages cannot exceed ${formatBytes(CHAT_MESSAGE_MAX_BYTES)}.`,
         { id: CHAT_MESSAGE_LIMIT_TOAST_ID }
       )
-      return
+      return false
     }
 
-    if (rtcSession.sendMessage(draft)) setDraft("")
+    if (!rtcSession.sendMessage(message)) return false
+    if (!options?.preserveDraft) setDraft("")
+    return true
   }
 
   const sendDroppedTransfer = async (dataTransfer: DataTransfer) => {
@@ -148,7 +179,9 @@ function RtcPage() {
       await rtcSession.sendFile(transfer.file)
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not read the dropped item"
+        error instanceof Error
+          ? error.message
+          : "Could not read the dropped item"
       )
     }
   }
@@ -166,7 +199,9 @@ function RtcPage() {
       )
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not read the dropped folder"
+        error instanceof Error
+          ? error.message
+          : "Could not read the dropped folder"
       )
     }
   }
@@ -187,353 +222,357 @@ function RtcPage() {
       void sendDroppedTransfer(dataTransfer)
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Could not read the dropped item"
+        error instanceof Error
+          ? error.message
+          : "Could not read the dropped item"
       )
     }
   }
 
-  return (
-    <main className="min-h-dvh bg-[#F5F4F0] text-[#14171F]">
-      {folderUploadPreferenceDialog}
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
-        .ptx-display { font-family: 'Space Grotesk', ui-sans-serif, system-ui; }
-        .ptx-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-        .ptx-workspace, .ptx-workspace button, .ptx-workspace input { font-family: 'Inter', ui-sans-serif, system-ui; }
-      `}</style>
+  const messagePanel = (
+    <MessageComponent
+      messages={textMessages}
+      draft={draft}
+      connected={channelOpen}
+      callStatus={callStatus}
+      onDraftChange={updateDraft}
+      inputId="peer-message-draft"
+      onSend={sendMessage}
+      onStartVideoCall={() => {
+        rtcSession.requestVideoCall()
+      }}
+      className={
+        desktopChat
+          ? "lg:h-[calc(100dvh-9rem)] lg:min-h-0"
+          : "h-[min(80dvh,680px)] min-h-0 border-0 shadow-none"
+      }
+    />
+  )
 
-      <div className="ptx-workspace">
-        <header className="sticky top-0 z-30 border-b border-[#E4E1DA] bg-[#F5F4F0]/90 backdrop-blur">
-          <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
+  return (
+    <main className="relative isolate min-h-dvh bg-[#f2f3f5] font-sans text-foreground selection:bg-violet-100 selection:text-violet-950 dark:bg-[#111214] dark:selection:bg-violet-900 dark:selection:text-violet-100">
+      <RoomBackdrop />
+      {folderUploadPreferenceDialog}
+
+      <div>
+        <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-sm">
+          <div className="mx-auto flex min-h-20 w-full max-w-[1360px] flex-wrap items-center gap-x-3 gap-y-3 px-5 py-4 sm:px-8 lg:px-12">
             <Link
               to="/"
               onClick={() => {
                 rtcSession.endSession()
                 setWs(null)
               }}
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[#4B5160] transition-colors hover:bg-[#EAE7DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C]"
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 motion-reduce:transition-none"
               aria-label="Back to home"
             >
               <ArrowLeft className="size-[18px]" />
             </Link>
 
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="relative size-9 shrink-0" aria-hidden="true">
-                <img
-                  src="/peertoss-logo.svg"
-                  alt=""
-                  className="size-9 dark:hidden"
-                />
-                <img
-                  src="/peertoss-logo-dark.svg"
-                  alt=""
-                  className="hidden size-9 dark:block"
-                />
-              </span>
-              <span className="truncate text-base font-semibold tracking-tight">
-                PeerToss
-              </span>
-            </div>
+            <img
+              src="/peertoss-wordmark.svg?v=2"
+              alt="PeerToss"
+              width="112"
+              height="29"
+              className="h-auto w-24 shrink-0 sm:w-28 dark:invert"
+            />
 
-            <span className="ptx-mono ml-2 hidden rounded-md border border-[#E4E1DA] bg-white px-2 py-1 text-[11px] text-[#8A8776] sm:inline">
-              ROOM {roomActive ? "ACTIVE" : "OFFLINE"}
+            <span className="ml-2 hidden border-l border-border pl-5 text-sm text-muted-foreground lg:inline">
+              Private room
             </span>
 
-
-            <div className="ml-auto flex items-center gap-2 rounded-full border border-[#E4E1DA] bg-white py-1 pl-1 pr-2.5 sm:pr-3">
-              <span className="relative flex size-2">
-                {directConnectionOpen && (
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#16947F] opacity-60" />
-                )}
+            <div className="ml-auto flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
+              <div
+                role="status"
+                className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-2"
+              >
                 <span
-                  className={`relative inline-flex size-2 rounded-full ${directConnectionOpen
-                    ? "bg-[#16947F]"
-                    : roomActive
-                      ? "bg-[#F2A33C]"
-                      : "bg-[#8A8776]"
+                  className="relative flex size-2 shrink-0"
+                  aria-hidden="true"
+                >
+                  {directConnectionOpen && (
+                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-40 motion-reduce:animate-none" />
+                  )}
+                  <span
+                    className={`relative inline-flex size-2 rounded-full ${
+                      directConnectionOpen
+                        ? "bg-emerald-500"
+                        : roomActive
+                          ? "bg-amber-500"
+                          : "bg-muted-foreground"
                     }`}
-                />
-              </span>
-              <span className="hidden text-[13px] font-medium md:inline">
-                {connectionLabel}
-              </span>
+                  />
+                </span>
+                <span className="text-xs font-medium sm:text-[13px]">
+                  {connectionLabel}
+                </span>
+              </div>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 gap-2 rounded-xl bg-card px-3 text-xs shadow-sm"
+                  >
+                    {speedTestRunning ? (
+                      <Loader2
+                        className="size-3.5 animate-spin"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <Gauge className="size-3.5" aria-hidden="true" />
+                    )}
+                    {speedTestRunning ? "Testing…" : "Test speed"}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl p-0 font-sans sm:max-w-sm md:max-w-lg lg:max-w-[560px]">
+                  <DialogTitle className="sr-only">
+                    Direct link speed
+                  </DialogTitle>
+                  <DialogDescription className="sr-only">
+                    Test throughput across the direct WebRTC connection.
+                  </DialogDescription>
+                  <aside className="flex flex-col rounded-2xl bg-card p-6 pt-12 md:px-8 md:pb-8 lg:px-10">
+                    <SpeedMeter
+                      className="md:min-h-[480px] lg:min-h-[520px]"
+                      uploadMbps={uploadMbps}
+                      downloadMbps={downloadMbps}
+                      running={speedTestRunning}
+                      activeDirection={speedTestDirection}
+                      waitingForPeer={speedTestWaiting}
+                      disabled={speedTestDisabled}
+                      sampleSizeLabel={formatBytes(RTC_SPEED_TEST_SAMPLE_SIZE)}
+                      onRun={() => {
+                        void rtcSession.runSpeedTest()
+                      }}
+                    />
+                  </aside>
+                </DialogContent>
+              </Dialog>
             </div>
           </div>
         </header>
 
-        <div className="mx-auto w-full max-w-[1536px] px-4 py-8 sm:px-6 sm:py-10">
-          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="mx-auto w-full max-w-[1360px] px-5 pb-24 pt-6 sm:px-8 sm:pt-8 lg:px-12 lg:pb-8">
+          <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.52fr)] lg:gap-6">
             <div className="min-w-0">
-              {/* <div className="mb-8"> */}
-              {/*   <p className="ptx-mono text-[11px] uppercase tracking-[0.14em] text-[#8A8776]"> */}
-              {/*     Transfer workspace */}
-              {/*   </p> */}
-              {/*   <h1 className="ptx-display mt-1.5 text-[28px] font-semibold leading-tight sm:text-[32px]"> */}
-              {/*     One link, straight to your peer. */}
-              {/*   </h1> */}
-              {/*   <p className="mt-1.5 max-w-lg text-sm leading-relaxed text-[#4B5160]"> */}
-              {/*     Files move directly between these two devices. Nothing is stored */}
-              {/*     in a permanent server library. */}
-              {/*   </p> */}
-              {/* </div> */}
-
-              <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-                <div className="grid gap-5 " >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    disabled={!canChooseFile}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0]
-                      if (file) {
-                        void rtcSession.sendFile(file)
-                      }
-                      event.target.value = ""
-                    }}
-                  />
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    disabled={!canChooseFile}
-                    onChange={(event) => {
-                      const files = Array.from(event.target.files ?? [])
-                      if (files.length) {
-                        requestFolderUpload((ignoreGenerated) => {
-                          void rtcSession.sendFolder(files, 0, ignoreGenerated)
-                        })
-                      }
-                      event.target.value = ""
-                    }}
-                  />
-
-                  <div
-                    role="button"
-                    tabIndex={canChooseFile ? 0 : -1}
-                    aria-disabled={!canChooseFile}
-                    onClick={() => {
-                      if (canChooseFile) fileInputRef.current?.click()
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        canChooseFile &&
-                        (event.key === "Enter" || event.key === " ")
-                      ) {
-                        event.preventDefault()
-                        fileInputRef.current?.click()
-                      }
-                    }}
-                    onMouseOver={() => setIsMouseOver(true)}
-                    onMouseOut={() => setIsMouseOver(false)}
-                    onDragEnter={(event) => {
-                      event.preventDefault()
-                      if (canChooseFile) setDraggingFile(true)
-                    }}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDragLeave={() => setDraggingFile(false)}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      setDraggingFile(false)
-
-                      if (!canChooseFile) {
-                        toast.error("Connect to a peer before selecting a file or folder")
-                        return
-                      }
-
-                      handleDroppedItem(event.dataTransfer)
-                    }}
-                    className={`relative flex min-h-[320px] flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F5F4F0] ${!canChooseFile
-                      ? "cursor-not-allowed border-[#DEDAD1] bg-white/60"
-                      : draggingFile
-                        ? "cursor-copy border-[#F2A33C] bg-[#FBEAD2]/40"
-                        : "cursor-pointer border-[#D8D4C9] bg-white"
-                      } ${canChooseFile && isMouseOver && !draggingFile
-                        ? "!border-[#7CB88F] !bg-[#EEF6F0] -translate-y-1 shadow-lg shadow-[#7CB88F]/20"
-                        : ""
-                      }`}
-                  >
-
-                    {[
-                      "left-4 top-4 border-l-2 border-t-2",
-                      "right-4 top-4 border-r-2 border-t-2",
-                      "bottom-4 left-4 border-b-2 border-l-2",
-                      "bottom-4 right-4 border-b-2 border-r-2",
-                    ].map((position) => (
-                      <span
-                        key={position}
-                        className={`pointer-events-none absolute size-4 rounded-[3px] border-[#D8D4C9] ${position}`}
-                      />
-                    ))}
-
-                    <div
-                      className={`flex size-14 items-center justify-center rounded-full transition-colors ${draggingFile
-                        ? "bg-[#F2A33C] text-white"
-                        : canChooseFile
-                          ? "bg-[#F5F4F0] text-[#4B5160]"
-                          : "bg-[#ECE9E1] text-[#AAA697]"
-                        }`}
-                    >
-                      {sendingFile ? (
-                        <Loader2 className="size-6 animate-spin" strokeWidth={1.75} />
-                      ) : (
-                        <Upload className="size-6" strokeWidth={1.75} />
-                      )}
-                    </div>
-
-                    <p className="ptx-display mt-5 text-lg font-semibold">
-                      {sendingFile
-                        ? "Your file is on its way"
-                        : draggingFile
-                          ? "Release to add it"
-                          : canChooseFile
-                            ? "Drop a file or folder"
-                            : "The launch pad is waiting"}
-                    </p>
-                    <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[#8A8776]">
-                      {canChooseFile
-                        ? "Send one file, or package an entire folder into a ZIP before it leaves this device."
-                        : "Open the direct file channel, then choose or drop a file here."}
-                    </p>
-
-                    <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        disabled={!canChooseFile}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (canChooseFile) fileInputRef.current?.click()
-                        }}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#14171F] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#C4C0B5]"
-                      >
-                        Browse files
-                        <ArrowUpRight className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canChooseFile}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (canChooseFile) {
-                            folderInputRef.current?.click()
-                          }
-                        }}
-                        className="inline-flex items-center gap-2 rounded-xl border border-[#D8D4C9] bg-white px-4 py-2.5 text-sm font-medium text-[#14171F] transition-colors hover:bg-[#F5F4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-[#ECE9E1] disabled:text-[#8A8776]"
-                      >
-                        Browse folder
-                        <FolderUp className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                {/* signal section */}
-                <aside className="hidden flex-col rounded-2xl border border-[#E4E1DA] bg-white p-5 md:flex">
-                  <SpeedMeter
-                    uploadMbps={uploadMbps}
-                    downloadMbps={downloadMbps}
-                    running={speedTestRunning}
-                    activeDirection={speedTestDirection}
-                    waitingForPeer={speedTestWaiting}
-                    disabled={speedTestDisabled}
-                    sampleSizeLabel={formatBytes(RTC_SPEED_TEST_SAMPLE_SIZE)}
-                    onRun={() => {
-                      void rtcSession.runSpeedTest()
-                    }}
-                  />
-                </aside>
-              </div>
-              <ManifestPanel
-                transfers={transfers}
-                activeCount={activeCount}
-                mobileAction={
-                  <button
-                    type="button"
-                    onClick={() => setMobileSpeedOpen(true)}
-                    className="flex size-8 items-center justify-center rounded-full border border-[#E4E1DA] bg-white text-[#4B5160] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] md:hidden"
-                    aria-label="Open speed test"
-                  >
-                    <Gauge className="size-4" strokeWidth={1.75} />
-                  </button>
-                }
-              />
-            </div>
-
-            <MessageComponent
-              messages={textMessages}
-              draft={draft}
-              connected={channelOpen}
-              callStatus={callStatus}
-              onDraftChange={updateDraft}
-              inputId="peer-message-draft-desktop"
-              onSend={() => {
-                void sendMessage()
-              }}
-              onStartVideoCall={() => {
-                rtcSession.requestVideoCall()
-              }}
-              className="hidden md:flex xl:sticky xl:top-24"
-            />
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setMobileChatOpen(true)}
-          className="fixed bottom-4 right-4 z-40 flex size-12 items-center justify-center rounded-full bg-[#14171F] text-[#F2A33C] shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F2A33C] focus-visible:ring-offset-2 md:hidden"
-          aria-label="Open messages"
-        >
-          <MessageCircle className="size-5" strokeWidth={1.9} />
-        </button>
-
-        <Dialog open={mobileSpeedOpen} onOpenChange={setMobileSpeedOpen}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 md:hidden">
-            <DialogTitle className="sr-only">Direct link speed</DialogTitle>
-            <DialogDescription className="sr-only">
-              Test throughput across the direct WebRTC connection.
-            </DialogDescription>
-            <aside className="flex flex-col bg-white p-5 pt-12">
-              <SpeedMeter
-                uploadMbps={uploadMbps}
-                downloadMbps={downloadMbps}
-                running={speedTestRunning}
-                activeDirection={speedTestDirection}
-                waitingForPeer={speedTestWaiting}
-                disabled={speedTestDisabled}
-                sampleSizeLabel={formatBytes(RTC_SPEED_TEST_SAMPLE_SIZE)}
-                onRun={() => {
-                  void rtcSession.runSpeedTest()
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                disabled={!canChooseFile}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) {
+                    void rtcSession.sendFile(file)
+                  }
+                  event.target.value = ""
                 }}
               />
-            </aside>
-          </DialogContent>
-        </Dialog>
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                disabled={!canChooseFile}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  if (files.length) {
+                    requestFolderUpload((ignoreGenerated) => {
+                      void rtcSession.sendFolder(files, 0, ignoreGenerated)
+                    })
+                  }
+                  event.target.value = ""
+                }}
+              />
 
-        <Dialog open={mobileChatOpen} onOpenChange={setMobileChatOpen}>
-          <DialogContent className="w-[calc(100%-2rem)] gap-0 overflow-hidden p-0 md:hidden [&>section>header]:pr-16 [&>[data-slot=dialog-close]]:right-3 [&>[data-slot=dialog-close]]:top-3.5 [&>[data-slot=dialog-close]]:flex [&>[data-slot=dialog-close]]:size-9 [&>[data-slot=dialog-close]]:items-center [&>[data-slot=dialog-close]]:justify-center [&>[data-slot=dialog-close]]:rounded-xl [&>[data-slot=dialog-close]]:bg-[#F5F4F0] [&>[data-slot=dialog-close]]:text-[#4B5160] [&>[data-slot=dialog-close]]:opacity-100 [&>[data-slot=dialog-close]]:hover:bg-[#ECE9E1] [&>[data-slot=dialog-close]]:focus-visible:ring-2 [&>[data-slot=dialog-close]]:focus-visible:ring-[#F2A33C]">
-            <DialogTitle className="sr-only">Messages</DialogTitle>
-            <DialogDescription className="sr-only">
-              Messages shared across the direct WebRTC connection.
-            </DialogDescription>
-            <MessageComponent
-              messages={textMessages}
-              draft={draft}
-              connected={channelOpen}
-              callStatus={callStatus}
-              onDraftChange={updateDraft}
-              inputId="peer-message-draft-mobile"
-              onSend={() => {
-                void sendMessage()
-              }}
-              onStartVideoCall={() => {
-                rtcSession.requestVideoCall()
-              }}
-              className="max-h-[calc(100dvh-2rem)] border-0"
-            />
-          </DialogContent>
-        </Dialog>
+              <div
+                role="button"
+                tabIndex={canChooseFile ? 0 : -1}
+                aria-disabled={!canChooseFile}
+                onClick={() => {
+                  if (canChooseFile) fileInputRef.current?.click()
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    canChooseFile &&
+                    (event.key === "Enter" || event.key === " ")
+                  ) {
+                    event.preventDefault()
+                    fileInputRef.current?.click()
+                  }
+                }}
+                onDragEnter={(event) => {
+                  event.preventDefault()
+                  if (canChooseFile) setDraggingFile(true)
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => setDraggingFile(false)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDraggingFile(false)
+
+                  if (!canChooseFile) {
+                    toast.error(
+                      "Connect to a peer before selecting a file or folder"
+                    )
+                    return
+                  }
+
+                  handleDroppedItem(event.dataTransfer)
+                }}
+                data-dragging={draggingFile || undefined}
+                className={`rtc-upload-zone relative isolate flex min-h-[380px] flex-col items-center justify-center rounded-2xl border-2 border-dashed px-5 py-10 text-center shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-[background-color,border-color,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-4 focus-visible:ring-offset-background motion-reduce:transition-none sm:min-h-[420px] sm:px-8 lg:min-h-[460px] ${
+                  !canChooseFile
+                    ? "cursor-not-allowed border-[#D8D4C9] bg-card dark:border-border"
+                    : draggingFile
+                      ? "cursor-copy border-[#7CB88F] bg-[#EEF6F0] ring-2 ring-[#7CB88F]/15 dark:bg-[#243329]"
+                      : "cursor-pointer border-[#D8D4C9] bg-card dark:border-border"
+                } ${canChooseFile ? "rtc-upload-ready" : ""}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-4 text-muted-foreground/30"
+                >
+                  <span className="absolute left-0 top-0 size-3.5 rounded-tl border-l border-t" />
+                  <span className="absolute right-0 top-0 size-3.5 rounded-tr border-r border-t" />
+                  <span className="absolute bottom-0 left-0 size-3.5 rounded-bl border-b border-l" />
+                  <span className="absolute bottom-0 right-0 size-3.5 rounded-br border-b border-r" />
+                </span>
+                <div className="flex flex-col items-center gap-6">
+                  <div
+                    className={`relative flex size-14 shrink-0 items-center justify-center rounded-full transition-colors motion-reduce:transition-none ${
+                      draggingFile
+                        ? "bg-[#7CB88F] text-[#14251A]"
+                        : canChooseFile
+                          ? "bg-[#F5F4F0] text-[#4B5160] dark:bg-muted dark:text-muted-foreground"
+                          : "border-border bg-muted/50 text-muted-foreground"
+                    }`}
+                  >
+                    {sendingFile ? (
+                      <Loader2
+                        className="size-6 animate-spin"
+                        strokeWidth={1.75}
+                      />
+                    ) : (
+                      <Upload
+                        className={`rtc-upload-icon size-6 ${canChooseFile ? "text-[#357A4B] dark:text-[#8DCEA1]" : ""}`}
+                        strokeWidth={1.75}
+                      />
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="text-xl font-semibold tracking-[-0.025em]">
+                      {sendingFile
+                        ? "Your file is on its way"
+                        : speedTestRunning
+                          ? "Testing your connection"
+                          : draggingFile
+                            ? "Release to add it"
+                            : canChooseFile
+                              ? "Drop a file or folder"
+                              : "Waiting to connect"}
+                    </p>
+                    <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+                      {sendingFile
+                        ? "Keep this room open while your file finishes sending."
+                        : speedTestRunning
+                          ? "You can send files when the speed test finishes."
+                          : canChooseFile
+                            ? "Drop anywhere here, or click to choose a file. Folders are packaged as a ZIP before sending."
+                            : "File sharing will be ready as soon as your peer connects."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={!canChooseFile}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (canChooseFile) fileInputRef.current?.click()
+                    }}
+                    className="h-11 rounded-xl bg-[#14171F] px-4 text-white shadow-sm hover:bg-[#262B3A] focus-visible:ring-[#7CB88F] dark:bg-foreground dark:text-background dark:hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none motion-reduce:transition-none"
+                  >
+                    Browse files
+                    <ArrowUpRight className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!canChooseFile}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (canChooseFile) {
+                        folderInputRef.current?.click()
+                      }
+                    }}
+                    className="h-11 rounded-xl border-input bg-card px-4 shadow-none hover:bg-muted focus-visible:ring-[#7CB88F] disabled:opacity-50 motion-reduce:transition-none"
+                  >
+                    Browse folder
+                    <FolderUp className="size-3.5" />
+                  </Button>
+                </div>
+                <p className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+                  <ShieldCheck
+                    className="size-3.5 shrink-0"
+                    aria-hidden="true"
+                  />
+                  Device to device. No server storage.
+                </p>
+              </div>
+              <ManifestPanel transfers={transfers} activeCount={activeCount} />
+            </div>
+
+            {desktopChat && (
+              <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
+                {messagePanel}
+              </div>
+            )}
+          </div>
+        </div>
+        {!desktopChat && (
+          <Dialog
+            open={mobileChatOpen}
+            onOpenChange={handleMobileChatOpenChange}
+          >
+            <DialogTrigger asChild>
+              <button
+                type="button"
+                aria-label={
+                  unreadMessageCount
+                    ? `Open messages, ${unreadMessageLabel}`
+                    : "Open messages"
+                }
+                className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-5 z-40 inline-flex h-12 items-center gap-2 rounded-full bg-[#14171F] px-5 text-sm font-medium text-white shadow-lg hover:bg-[#262B3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7CB88F] focus-visible:ring-offset-2 dark:bg-foreground dark:text-background"
+              >
+                <MessageCircle className="size-5" aria-hidden="true" />
+                Messages
+                {unreadMessageCount > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#B5D2BD] px-1.5 text-[11px] font-semibold tabular-nums text-[#203A29]"
+                  >
+                    {unreadMessageCount > 99 ? "99+" : unreadMessageCount}
+                  </span>
+                )}
+              </button>
+            </DialogTrigger>
+            <span role="status" className="sr-only">
+              {unreadMessageCount ? unreadMessageLabel : ""}
+            </span>
+            <DialogContent className="gap-0 overflow-hidden rounded-2xl p-0 font-sans [&>section>header]:pr-14 [&>[data-slot=dialog-close]]:right-3 [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:flex [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:items-center [&>[data-slot=dialog-close]]:justify-center [&>[data-slot=dialog-close]]:rounded-lg [&>[data-slot=dialog-close]]:bg-muted [&>[data-slot=dialog-close]]:opacity-100">
+              <DialogTitle className="sr-only">Messages</DialogTitle>
+              <DialogDescription className="sr-only">
+                Chat, send reactions, or start a call with your connected peer.
+              </DialogDescription>
+              {messagePanel}
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
-
     </main>
   )
 }
