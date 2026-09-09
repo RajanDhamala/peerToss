@@ -31,7 +31,6 @@ type sessionClaims struct {
 	jwt.RegisteredClaims
 }
 
-
 func CreateUserToken(id string) (string, *UserJWT, error) {
 	claims := tokenClaims{
 		ID: id,
@@ -48,7 +47,6 @@ func CreateUserToken(id string) (string, *UserJWT, error) {
 	data := UserJWT{ID: claims.ID}
 
 	return token, &data, nil
-
 }
 
 func CreateSessionToken(id string, userId string, role string) (string, error) {
