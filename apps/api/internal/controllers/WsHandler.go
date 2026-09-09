@@ -3,7 +3,6 @@ package controller
 import (
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -36,7 +35,6 @@ func isAllowedWebSocketOrigin(r *http.Request) bool {
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: isAllowedWebSocketOrigin,
-
 }
 
 type Client struct {
@@ -105,7 +103,7 @@ type WsMessage struct {
 	Data  json.RawMessage `json:"data"`
 }
 
-func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
+func (ctrl *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	user, ok := r.Context().Value(utils.UserKey).(*utils.UserJWT)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -173,14 +171,19 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
+
+	ctrl.ActiveConnections.Inc()
+	ctrl.ActiveRooms.Inc()
 	defer func() {
 		client.Close()
+		ctrl.ActiveConnections.Dec()
 
 		SessionsMu.Lock()
 		activeSession := ActiveSessions[seesionInfo.ID]
 		if activeSession != nil &&
 			(activeSession.User1 == &client || activeSession.User2 == &client) {
 			delete(ActiveSessions, seesionInfo.ID)
+			ctrl.ActiveRooms.Dec()
 		}
 		SessionsMu.Unlock()
 	}()
@@ -235,12 +238,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		msg := WsMessage{}
 		err := conn.ReadJSON(&msg)
 		if err != nil {
-			fmt.Printf(
-				"websocket read ended: session=%s role=%s error=%v\n",
-				seesionInfo.ID,
-				seesionInfo.Role,
-				err,
-			)
 			break
 		}
 		if !client.Limiter.Allow() {
@@ -257,7 +254,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Event {
 		case "create-offer":
-			fmt.Println("offer")
 
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
@@ -279,8 +275,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case "create-answer":
-
-			fmt.Println("answer")
 
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
@@ -304,8 +298,6 @@ func (c *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case "send-ice-candidate", "send-ice-candiate":
-
-			fmt.Println("ice-candidate")
 
 			SessionsMu.RLock()
 			resthai, ok := ActiveSessions[seesionInfo.ID]
