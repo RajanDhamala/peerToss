@@ -173,7 +173,6 @@ func (ctrl *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	ctrl.ActiveConnections.Inc()
-	ctrl.ActiveRooms.Inc()
 	defer func() {
 		client.Close()
 		ctrl.ActiveConnections.Dec()
@@ -200,6 +199,7 @@ func (ctrl *Controller) WsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		SessionsMu.Lock()
 		ActiveSessions[seesionInfo.ID] = &data
+		ctrl.ActiveRooms.Inc()
 		SessionsMu.Unlock()
 	} else {
 		SessionsMu.Lock()

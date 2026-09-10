@@ -1,0 +1,43 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus-data:/prometheus
+    networks:
+      - monitoring
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "250M"
+        reservations:
+          cpus: "0.3"
+          memory: "200M"
+
+  grafana:
+    image: grafana/grafana:12.4.6
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "250M"
+        reservations:
+          cpus: "0.3"
+          memory: "200M"
+
+networks:
+  monitoring:
+    driver: bridge
