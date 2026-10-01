@@ -63,19 +63,16 @@ The WebSocket server is only the introduction layer: it pairs the devices and pa
 
 ## Run Locally
 
-Start the signaling server:
+From the repository root, start the API:
 
 ```bash
-cd apps/api
-go run ./cmd/api
+make api
 ```
 
-In another terminal, start the web client:
+In another terminal, start the frontend:
 
 ```bash
-cd apps/web
-pnpm install
-pnpm dev
+make web
 ```
 
 ## Contributing
